@@ -7,6 +7,7 @@ struct CleanUpMusicApp: App {
 
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
+        NSApplication.shared.applicationIconImage = Bundle.module.url(forResource: "AppIcon", withExtension: "svg").flatMap(NSImage.init(contentsOf:))
         DispatchQueue.main.async { NSApplication.shared.activate(ignoringOtherApps: true) }
     }
 
