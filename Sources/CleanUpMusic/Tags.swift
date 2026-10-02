@@ -44,4 +44,21 @@ enum Tags {
         }
         return false
     }
+
+    static func embedArt(_ url: URL, _ data: Data, mime: String) throws {
+        guard let f = taglib_file_new(url.path), taglib_file_is_valid(f) != 0 else { throw TagError(url: url) }
+        defer { taglib_file_free(f) }
+        let ok = data.withUnsafeBytes { raw in
+            cum_set_picture(f, raw.baseAddress!.assumingMemoryBound(to: CChar.self), UInt32(data.count), mime) != 0
+        }
+        guard ok, taglib_file_save(f) != 0 else { throw TagError(url: url) }
+    }
+
+    static func embeddedArt(_ url: URL) -> Data? {
+        guard let f = taglib_file_new(url.path), let props = taglib_complex_property_get(f, "PICTURE") else { return nil }
+        defer { taglib_complex_property_free(props); taglib_file_free(f) }
+        var pic = TagLib_Complex_Property_Picture_Data()
+        taglib_picture_from_complex_property(props, &pic)
+        return pic.data.map { Data(bytes: $0, count: Int(pic.size)) }
+    }
 }

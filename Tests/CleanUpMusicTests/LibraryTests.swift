@@ -36,6 +36,9 @@ private func touch(_ url: URL) {
         #expect(Tags.read(f)["TITLE"] == ["后来"])
         #expect(Tags.read(f)["ARTIST"] == ["刘若英", "陈升"])
         #expect(!Tags.hasEmbeddedArt(f))
+        try Tags.embedArt(f, Data([0xFF, 0xD8, 0xFF, 0xD9]), mime: "image/jpeg")
+        #expect(Tags.hasEmbeddedArt(f))
+        #expect(Tags.embeddedArt(f) == Data([0xFF, 0xD8, 0xFF, 0xD9]))
     }
 }
 
@@ -58,8 +61,8 @@ private func touch(_ url: URL) {
     let albums = Library.scanCovers(root)
     let changes = Library.scanChinese(root)
     let state = Dictionary(uniqueKeysWithValues: albums.map { ($0.dir.lastPathComponent, $0.cover) })
-    #expect(state["有封面"] == nil)
-    #expect(state["jpeg"] == nil)
+    #expect(state["有封面"] == .ok)
+    #expect(state["jpeg"] == .ok)
     #expect(FileManager.default.fileExists(atPath: jpeg.appendingPathComponent("cover.jpg").path))
     guard case .unreadable(let imgs) = state["front"] else { Issue.record("front not unreadable"); return }
     #expect(imgs.map(\.lastPathComponent) == ["front.jpg"])

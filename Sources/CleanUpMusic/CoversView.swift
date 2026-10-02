@@ -4,20 +4,34 @@ import SwiftUI
 struct CoversView: View {
     @EnvironmentObject var m: Model
     @State private var selection: URL?
+    @State private var onlyMissing = true
+    @State private var filter = ""
 
     var body: some View {
         VStack(alignment: .leading) {
-            Button("掃描缺封面") { m.scanCovers() }.disabled(m.root == nil || m.scanning).padding([.top, .horizontal])
+            HStack {
+                Button("掃描封面") { m.scanCovers() }.disabled(m.root == nil || m.scanning)
+                Toggle("只顯示缺封面", isOn: $onlyMissing)
+                TextField("篩選專輯", text: $filter).frame(maxWidth: 240)
+            }.padding([.top, .horizontal])
             covers
+        }
+    }
+
+    private var shown: [Album] {
+        m.albums.filter { a in
+            (!onlyMissing || a.cover != .ok)
+                && (filter.isEmpty || [a.title, a.artist, a.dir.path].contains { $0.localizedCaseInsensitiveContains(filter) })
         }
     }
 
     private var covers: some View {
         HSplitView {
-            List(m.albums, selection: $selection) { a in
+            List(shown, selection: $selection) { a in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(a.title).bold()
                     Text(a.artist)
+                    if a.cover == .ok { Text("已有封面").foregroundStyle(.green) }
                     if case .unreadable(let imgs) = a.cover {
                         Text("有 \(imgs.count) 張圖但 MinimServer 讀不到").foregroundStyle(.orange)
                     }
@@ -47,16 +61,38 @@ struct CoverPicker: View {
     @State private var searching = false
     @State private var urlText = ""
     @State private var parentImages: [URL] = []
+    @State private var current: [(name: String, image: NSImage)] = []
+    @AppStorage("coverToFile") private var toFile = true
+    @AppStorage("coverToEmbed") private var toEmbed = false
 
     var body: some View {
         VStack(alignment: .leading) {
+            if !current.isEmpty {
+                VStack(alignment: .leading) {
+                    Text("目前封面").bold()
+                    HStack(alignment: .top) {
+                        ForEach(current, id: \.name) { c in
+                            VStack {
+                                Image(nsImage: c.image).resizable().scaledToFit().frame(width: 170, height: 170)
+                                Text(c.name).font(.caption)
+                                Text("\(Int(c.image.size.width))×\(Int(c.image.size.height))").font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    Divider()
+                }
+            }
             if case .unreadable(let imgs) = album.cover {
                 imageRow("資料夾裡現有的圖（檔名 MinimServer 讀不到）", imgs, button: "設為封面") { try Library.promote($0) }
             }
             if !parentImages.isEmpty {
                 imageRow("上一層資料夾的圖", parentImages, button: "複製為封面") {
-                    try Library.saveCover(Data(contentsOf: $0), in: album.dir)
+                    try Library.saveCover(Data(contentsOf: $0), for: album, file: toFile, embed: toEmbed)
                 }
+            }
+            HStack {
+                Toggle("存成 cover 檔", isOn: $toFile)
+                Toggle("嵌入 metadata", isOn: $toEmbed)
             }
             HStack {
                 TextField("搜尋", text: $query).onSubmit(search)
@@ -91,6 +127,18 @@ struct CoverPicker: View {
             guard let u = urls.first else { return false }
             save(from: u)
             return true
+        }
+        .task(id: album.cover) {
+            let a = album
+            current = await Task.detached {
+                var out: [(name: String, image: NSImage)] = []
+                let files = (try? FileManager.default.contentsOfDirectory(at: a.dir, includingPropertiesForKeys: nil)) ?? []
+                for u in files.filter(Library.isMinimCover).sorted(by: { $0.path < $1.path }) {
+                    if let i = NSImage(contentsOf: u) { out.append((u.lastPathComponent, i)) }
+                }
+                if let d = Tags.embeddedArt(a.tracks[0]), let i = NSImage(data: d) { out.append(("內嵌", i)) }
+                return out
+            }.value
         }
         .task {
             query = "\(album.title) \(album.artist)"
@@ -134,7 +182,7 @@ struct CoverPicker: View {
     private func save(from url: URL) {
         m.fixCover(album) {
             let data = url.isFileURL ? try Data(contentsOf: url) : try await URLSession.shared.data(from: url).0
-            try Library.saveCover(data, in: album.dir)
+            try Library.saveCover(data, for: album, file: toFile, embed: toEmbed)
         }
     }
 

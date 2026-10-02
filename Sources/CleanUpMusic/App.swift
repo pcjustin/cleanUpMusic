@@ -53,12 +53,12 @@ final class Model: ObservableObject {
         }
     }
 
-    /// Runs a cover fix for one album and drops it from the list on success.
+    /// Runs a cover fix for one album and marks it covered on success.
     func fixCover(_ album: Album, _ op: @escaping () async throws -> Void) {
         Task {
             do {
                 try await op()
-                albums.removeAll { $0.id == album.id }
+                if let i = albums.firstIndex(where: { $0.id == album.id }) { albums[i].cover = .ok }
             } catch {
                 message = error.localizedDescription
             }

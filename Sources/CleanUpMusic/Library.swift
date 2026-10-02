@@ -9,7 +9,7 @@ struct Album: Identifiable {
     let dir: URL
     var id: URL { dir }
     let tracks: [URL]
-    let cover: CoverState
+    var cover: CoverState
     let title: String
     let artist: String
 }
@@ -66,14 +66,13 @@ enum Library {
         return (dirs, URL(fileURLWithPath: realRoot).pathComponents.count)
     }
 
-    /// Albums MinimServer would show without artwork. Renames `cover.jpeg` / `folder.jpeg` on the way.
+    /// All albums with their cover state. Renames `cover.jpeg` / `folder.jpeg` on the way.
     static func scanCovers(_ root: URL, progress: (Int) -> Void = { _ in }) -> [Album] {
         var albums: [Album] = []
         for (i, d) in audioDirs(root).dirs.enumerated() {
             progress(i)
             let images = d.files.filter { imageExts.contains($0.pathExtension.lowercased()) }.map(fixJpeg)
             let cover = coverState(images: images, firstTrack: d.tracks[0])
-            guard cover != .ok else { continue }
             let tags = Tags.read(d.tracks[0])
             albums.append(Album(
                 dir: d.dir, tracks: d.tracks, cover: cover,
@@ -155,10 +154,26 @@ enum Library {
         try rename(image, to: image.deletingLastPathComponent().appendingPathComponent("cover." + ext))
     }
 
-    static func saveCover(_ data: Data, in dir: URL) throws {
-        let target = dir.appendingPathComponent("cover." + imageExt(data))
-        try data.write(to: target, options: .atomic)
-        log("cover", "", target.path)
+    /// Writes `cover.<ext>` (dropping other `cover.*` variants) and/or embeds the image in every track.
+    static func saveCover(_ data: Data, for album: Album, file: Bool, embed: Bool) throws {
+        guard file || embed else { throw CocoaError(.userCancelled) }
+        if file {
+            let fm = FileManager.default
+            let ext = imageExt(data)
+            for other in ["jpg", "jpeg", "png", "webp"] where other != ext {
+                try? fm.removeItem(at: album.dir.appendingPathComponent("cover." + other))
+            }
+            let target = album.dir.appendingPathComponent("cover." + ext)
+            try data.write(to: target, options: .atomic)
+            log("cover", "", target.path)
+        }
+        if embed {
+            let mime = "image/" + (imageExt(data) == "jpg" ? "jpeg" : imageExt(data))
+            for t in album.tracks {
+                try Tags.embedArt(t, data, mime: mime)
+                log("cover embed", "", t.path)
+            }
+        }
     }
 
     static func imageExt(_ data: Data) -> String {
