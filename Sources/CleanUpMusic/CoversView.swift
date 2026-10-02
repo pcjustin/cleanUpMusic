@@ -22,15 +22,19 @@ struct CoversView: View {
                         Text("有 \(imgs.count) 張圖但 MinimServer 讀不到").foregroundStyle(.orange)
                     }
                     Text(a.dir.path).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
                 }
             }
-            .frame(minWidth: 320)
+            .frame(minWidth: 280, idealWidth: 360, maxWidth: 520)
 
-            if let album = m.albums.first(where: { $0.id == selection }) {
-                CoverPicker(album: album).id(album.id)
-            } else {
-                Text("從左邊選一張專輯").frame(maxWidth: .infinity, maxHeight: .infinity)
+            Group {
+                if let album = m.albums.first(where: { $0.id == selection }) {
+                    CoverPicker(album: album).id(album.id)
+                } else {
+                    Text("從左邊選一張專輯")
+                }
             }
+            .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
