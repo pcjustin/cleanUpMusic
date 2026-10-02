@@ -1,0 +1,5 @@
+module COpenCC [system] {
+    header "shim.h"
+    link "opencc"
+    export *
+}
