@@ -82,6 +82,7 @@ struct CoverPicker: View {
                     Divider()
                 }
             }
+            if album.split { Text("此資料夾含多個專輯（單曲），只能嵌入 metadata").foregroundStyle(.secondary) }
             if case .unreadable(let imgs) = album.cover {
                 imageRow("資料夾裡現有的圖（檔名 MinimServer 讀不到）", imgs, button: "設為封面") { try Library.promote($0) }
             }
@@ -91,7 +92,7 @@ struct CoverPicker: View {
                 }
             }
             HStack {
-                Toggle("存成 cover 檔", isOn: $toFile)
+                Toggle("存成 cover 檔", isOn: $toFile).disabled(album.split)
                 Toggle("嵌入 metadata", isOn: $toEmbed)
             }
             HStack {
@@ -132,7 +133,7 @@ struct CoverPicker: View {
             let a = album
             current = await Task.detached {
                 var out: [(name: String, image: NSImage)] = []
-                let files = (try? FileManager.default.contentsOfDirectory(at: a.dir, includingPropertiesForKeys: nil)) ?? []
+                let files = a.split ? [] : (try? FileManager.default.contentsOfDirectory(at: a.dir, includingPropertiesForKeys: nil)) ?? []
                 for u in files.filter(Library.isMinimCover).sorted(by: { $0.path < $1.path }) {
                     if let i = NSImage(contentsOf: u) { out.append((u.lastPathComponent, i)) }
                 }

@@ -7,7 +7,9 @@ enum CoverState: Equatable {
 
 struct Album: Identifiable {
     let dir: URL
-    var id: URL { dir }
+    /// True when the folder holds tracks of several ALBUMs (e.g. singles); folder-level cover files don't apply.
+    var split = false
+    var id: URL { split ? tracks[0] : dir }
     let tracks: [URL]
     var cover: CoverState
     let title: String
@@ -72,12 +74,19 @@ enum Library {
         for (i, d) in audioDirs(root).dirs.enumerated() {
             progress(i)
             let images = d.files.filter { imageExts.contains($0.pathExtension.lowercased()) }.map(fixJpeg)
-            let cover = coverState(images: images, firstTrack: d.tracks[0])
-            let tags = Tags.read(d.tracks[0])
-            albums.append(Album(
-                dir: d.dir, tracks: d.tracks, cover: cover,
-                title: tags["ALBUM"]?.first ?? d.dir.lastPathComponent,
-                artist: (tags["ALBUMARTIST"] ?? tags["ARTIST"])?.first ?? ""))
+            // ponytail: reads every track's tags to detect singles; sample a few tracks if NAS scans get slow.
+            let tags = d.tracks.map(Tags.read)
+            let byAlbum = Dictionary(grouping: d.tracks.indices) { tags[$0]["ALBUM"]?.first ?? "" }
+            let split = byAlbum.count > 1
+            for idxs in byAlbum.values.sorted(by: { $0[0] < $1[0] }) {
+                let tracks = idxs.map { d.tracks[$0] }
+                let t = tags[idxs[0]]
+                albums.append(Album(
+                    dir: d.dir, split: split, tracks: tracks,
+                    cover: coverState(images: images, firstTrack: tracks[0]),
+                    title: t["ALBUM"]?.first ?? d.dir.lastPathComponent,
+                    artist: (t["ALBUMARTIST"] ?? t["ARTIST"])?.first ?? ""))
+            }
         }
         return albums
     }
@@ -156,8 +165,8 @@ enum Library {
 
     /// Writes `cover.<ext>` (dropping other `cover.*` variants) and/or embeds the image in every track.
     static func saveCover(_ data: Data, for album: Album, file: Bool, embed: Bool) throws {
-        guard file || embed else { throw CocoaError(.userCancelled) }
-        if file {
+        guard (file && !album.split) || embed else { throw CocoaError(.userCancelled) }
+        if file && !album.split {
             let fm = FileManager.default
             let ext = imageExt(data)
             for other in ["jpg", "jpeg", "png", "webp"] where other != ext {

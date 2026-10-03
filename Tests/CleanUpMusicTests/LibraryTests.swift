@@ -104,3 +104,16 @@ private func touch(_ url: URL) {
     #expect(group("刘若英") == "資料夾：刘若英")
     #expect(Set(changes.filter { $0.kind == .tag("ALBUM") }.map(\.group)) == ["後來 – 劉若英", "刘若英/冷门"])
 }
+
+@Test func singlesInOneFolderAreSeparateAlbums() throws {
+    let root = try tempDir()
+    for name in ["a", "b"] {
+        let f = root.appendingPathComponent("\(name).flac")
+        try makeAudio(f)
+        try Tags.write(f, ["ALBUM": [name]])
+    }
+    let albums = Library.scanCovers(root)
+    #expect(albums.count == 2)
+    #expect(albums.allSatisfy { $0.split && $0.tracks.count == 1 })
+    #expect(Set(albums.map(\.id)).count == 2)
+}
