@@ -172,6 +172,20 @@ private func touch(_ url: URL) {
     #expect(Library.scanDiscs(root).isEmpty)
 }
 
+@Test func markerOnlyAlbumConvergesToParentFolderName() throws {
+    let root = try tempDir()
+    for (path, album) in [("OST/[Disc 1]/a.flac", " [Disc 1]"), ("OST/[Disc 2]/b.flac", " [Disc 1] [Disc 2]")] {
+        let f = root.appendingPathComponent(path)
+        try makeAudio(f)
+        try Tags.write(f, ["ALBUM": [album]])
+    }
+    #expect(Library.albumBase(" [Disc 1] [Disc 2]") == "")
+    let changes = Library.scanDiscs(root)
+    #expect(Set(changes.filter { $0.kind == .tag("ALBUM") }.map(\.new)) == ["OST [Disc 1]", "OST [Disc 2]"])
+    #expect(Library.applyDiscs(changes).isEmpty)
+    #expect(Library.scanDiscs(root).isEmpty)
+}
+
 @Test func embedContinuesPastUnreadableTrack() throws {
     let root = try tempDir()
     let broken = root.appendingPathComponent("a.flac"), good = root.appendingPathComponent("b.flac")

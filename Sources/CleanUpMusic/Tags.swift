@@ -23,9 +23,9 @@ enum Tags {
     }
 
     /// Reads many files at once; NAS latency dominates, so concurrency is a large win.
-    static func readAll(_ urls: [URL]) -> [[String: [String]]] {
+    static func readAll(_ urls: [URL], progress: (Int) -> Void = { _ in }) -> [[String: [String]]] {
         let box = Box(count: urls.count)
-        DispatchQueue.concurrentPerform(iterations: urls.count) { i in box.set(i, read(urls[i])) }
+        DispatchQueue.concurrentPerform(iterations: urls.count) { i in progress(box.set(i, read(urls[i]))) }
         return box.values
     }
 
@@ -33,7 +33,8 @@ enum Tags {
         private let lock = NSLock()
         private(set) var values: [[String: [String]]]
         init(count: Int) { values = Array(repeating: [:], count: count) }
-        func set(_ i: Int, _ v: [String: [String]]) { lock.lock(); values[i] = v; lock.unlock() }
+        private var done = 0
+        func set(_ i: Int, _ v: [String: [String]]) -> Int { lock.lock(); defer { lock.unlock() }; values[i] = v; done += 1; return done }
     }
 
     static func write(_ url: URL, _ fields: [String: [String]]) throws {

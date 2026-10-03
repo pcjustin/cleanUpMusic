@@ -80,14 +80,21 @@ enum Library {
         return (dirs, URL(fileURLWithPath: realRoot).pathComponents.count)
     }
 
+    /// Reads every track of every folder in one concurrent batch; small per-folder batches gain nothing on a NAS.
+    private static func readTags(_ dirs: [AudioDir], progress: (Int) -> Void) -> [[[String: [String]]]] {
+        let all = Tags.readAll(dirs.flatMap(\.tracks), progress: progress)
+        var start = 0
+        return dirs.map { d in defer { start += d.tracks.count }; return Array(all[start..<start + d.tracks.count]) }
+    }
+
     /// All albums with their cover state. Renames `cover.jpeg` / `folder.jpeg` on the way.
     static func scanCovers(_ root: URL, progress: (Int) -> Void = { _ in }) -> [Album] {
         var albums: [Album] = []
-        for (i, d) in audioDirs(root).dirs.enumerated() {
-            progress(i)
+        let dirs = audioDirs(root).dirs
+        let allTags = readTags(dirs, progress: progress)
+        for (d, tags) in zip(dirs, allTags) {
             let images = d.files.filter { imageExts.contains($0.pathExtension.lowercased()) }.map(fixJpeg)
             // ponytail: reads every track's tags to detect singles; sample a few tracks if NAS scans get slow.
-            let tags = Tags.readAll(d.tracks)
             let byAlbum = Dictionary(grouping: d.tracks.indices) { tags[$0]["ALBUM"]?.first ?? "" }
             let split = byAlbum.count > 1
             for idxs in byAlbum.values.sorted(by: { $0[0] < $1[0] }) {
@@ -106,9 +113,9 @@ enum Library {
     /// Folders whose tracks carry different ALBUM tags, which MinimServer shows as separate albums.
     static func scanSplits(_ root: URL, progress: (Int) -> Void = { _ in }) -> [AlbumSplit] {
         var splits: [AlbumSplit] = []
-        for (i, d) in audioDirs(root).dirs.enumerated() {
-            progress(i)
-            let albumOf = Dictionary(uniqueKeysWithValues: zip(d.tracks, Tags.readAll(d.tracks).map { $0["ALBUM"]?.first ?? "" }))
+        let dirs = audioDirs(root).dirs
+        for (d, tags) in zip(dirs, readTags(dirs, progress: progress)) {
+            let albumOf = Dictionary(uniqueKeysWithValues: zip(d.tracks, tags.map { $0["ALBUM"]?.first ?? "" }))
             let byAlbum = Dictionary(grouping: d.tracks) { albumOf[$0]! }
             guard byAlbum.count > 1 else { continue }
             let variants = byAlbum.map { AlbumSplit.Variant(album: $0.key, tracks: $0.value) }
@@ -142,6 +149,14 @@ enum Library {
         return (1...2).lazy.compactMap { Range(m.range(at: $0), in: folder).flatMap { Int(folder[$0]) } }.first
     }
 
+    /// Strips every trailing disc marker, so "Album [Disc 1] [Disc 2]" and a bare "[Disc 1]" reduce to "Album" and "".
+    static func albumBase(_ album: String) -> String {
+        var s = album.trimmingCharacters(in: .whitespaces)
+        while case let n = discSuffix.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "")
+            .trimmingCharacters(in: .whitespaces), n != s { s = n }
+        return s
+    }
+
     /// Proposes DISCNUMBER, DISCTOTAL and ALBUM `X [Disc n]` (MinimServer's disc-heading form) for tracks under
     /// sibling folders named like CD1 / Disc 2 / 碟3 (tracks may sit in a subfolder such as CD1/FLAC).
     /// All discs of a set share the most common ALBUM base, and a lone ALBUMARTIST value fills tracks lacking one.
@@ -170,8 +185,9 @@ enum Library {
             let tracks = zip(flat, allTags).map { (url: $0.url, n: $0.n, tags: $1) }
             read += tracks.count
             progress(read)
-            let bases = tracks.compactMap { $0.tags["ALBUM"]?.first.map { stripDisc($0) ?? $0 } }
+            let bases = tracks.compactMap { $0.tags["ALBUM"]?.first.map(albumBase) }.filter { !$0.isEmpty }
             let base = Dictionary(grouping: bases, by: { $0 }).max { ($0.value.count, $1.key) < ($1.value.count, $0.key) }?.key
+                ?? parent.lastPathComponent
             let artists = Set(tracks.compactMap { $0.tags["ALBUMARTIST"]?.first })
             for (t, n, tags) in tracks {
                 let old = tags["DISCNUMBER"]?.first ?? ""
@@ -182,7 +198,7 @@ enum Library {
                 if oldTotal != total {
                     changes.append(Change(kind: .tag("DISCTOTAL"), url: t, old: oldTotal, new: total, group: group))
                 }
-                if let album = tags["ALBUM"]?.first, let base, case let new = base + " [Disc \(n)]", new != album {
+                if let album = tags["ALBUM"]?.first, case let new = base + " [Disc \(n)]", new != album {
                     changes.append(Change(kind: .tag("ALBUM"), url: t, old: album, new: new, group: group))
                 }
                 if artists.count == 1, tags["ALBUMARTIST"] == nil {
@@ -212,13 +228,12 @@ enum Library {
 
     static func scanChinese(_ root: URL, progress: (Int) -> Void = { _ in }) -> [Change] {
         let (dirs, rootDepth) = audioDirs(root)
+        let allTags = readTags(dirs, progress: progress)
         let relative = { (u: URL) in u.pathComponents.dropFirst(rootDepth).joined(separator: "/") }
         var changes: [Change] = [], folderChanges: [Change] = []
         var seenFolders = Set<String>()
         var dirGroup: [String: String] = [:]
-        for (i, d) in dirs.enumerated() {
-            progress(i)
-            let tags = Tags.readAll(d.tracks)
+        for (d, tags) in zip(dirs, allTags) {
             let group = albumGroup(tags[0]) ?? relative(d.dir)
             dirGroup[d.dir.path] = group
 
