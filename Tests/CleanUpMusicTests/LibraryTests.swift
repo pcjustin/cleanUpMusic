@@ -117,3 +117,67 @@ private func touch(_ url: URL) {
     #expect(albums.allSatisfy { $0.split && $0.tracks.count == 1 })
     #expect(Set(albums.map(\.id)).count == 2)
 }
+
+@Test func albumSplits() throws {
+    let root = try tempDir()
+    let near = root.appendingPathComponent("near")
+    let far = root.appendingPathComponent("far")
+    let same = root.appendingPathComponent("same")
+    for (dir, albums) in [(near, ["Love Songs", "Love  Songs "]), (far, ["A", "B"]), (same, ["X", "X"])] {
+        for (i, album) in albums.enumerated() {
+            let f = dir.appendingPathComponent("\(i).flac")
+            try makeAudio(f)
+            try Tags.write(f, ["ALBUM": [album]])
+        }
+    }
+    let splits = Library.scanSplits(root)
+    #expect(splits.map(\.dir.lastPathComponent) == ["near", "far"])
+    #expect(splits.map(\.similar) == [true, false])
+}
+
+@Test func discNumbers() throws {
+    #expect(["CD1", "Disc 02", "disk3", "碟 4", "Discovery", "ABCD1"].map(Library.discNumber) == [1, 2, 3, 4, nil, nil])
+    let root = try tempDir()
+    for n in 1...2 {
+        let f = root.appendingPathComponent("Album/CD\(n)/t.flac")
+        try makeAudio(f)
+        try Tags.write(f, ["ALBUM": ["Album (Disc \(n))"]])
+    }
+    let lone = root.appendingPathComponent("Other/CD1/t.flac")
+    try makeAudio(lone)
+    let changes = Library.scanDiscs(root)
+    #expect(changes.map(\.new) == ["1", "2", "Album [Disc 1]", "2", "2", "Album [Disc 2]"])
+    #expect(Library.applyDiscs(changes).isEmpty)
+    #expect(Library.scanDiscs(root).isEmpty)
+    #expect(["Album CD1", "Album - Disc 02", "Album 碟3", "Album", "CD1"].map(Library.stripDisc) == ["Album", "Album", "Album", nil, nil])
+}
+
+@Test func discsInSubfoldersShareAlbumBase() throws {
+    let root = try tempDir()
+    let tracks: [(String, [String: [String]])] = [
+        ("Set/CD1/FLAC/a.flac", ["ALBUM": ["Show 1_2"]]),
+        ("Set/CD1/stray.flac", ["ALBUM": ["Show 1_2"]]),
+        ("Set/CD2/FLAC/b.flac", ["ALBUM": ["Show"], "ALBUMARTIST": ["Zimmer"]]),
+        ("Set/CD2/FLAC/c.flac", ["ALBUM": ["Show"], "ALBUMARTIST": ["Zimmer"]]),
+    ]
+    for (path, tags) in tracks {
+        let f = root.appendingPathComponent(path)
+        try makeAudio(f)
+        try Tags.write(f, tags)
+    }
+    let changes = Library.scanDiscs(root)
+    #expect(Set(changes.filter { $0.kind == .tag("ALBUM") }.map(\.new)) == ["Show [Disc 1]", "Show [Disc 2]"])
+    #expect(changes.filter { $0.kind == .tag("ALBUMARTIST") }.count == 2)
+    #expect(Library.applyDiscs(changes).isEmpty)
+    #expect(Library.scanDiscs(root).isEmpty)
+}
+
+@Test func embedContinuesPastUnreadableTrack() throws {
+    let root = try tempDir()
+    let broken = root.appendingPathComponent("a.flac"), good = root.appendingPathComponent("b.flac")
+    FileManager.default.createFile(atPath: broken.path, contents: Data())
+    try makeAudio(good)
+    let album = Album(dir: root, tracks: [broken, good], cover: .missing, title: "", artist: "")
+    #expect(throws: (any Error).self) { try Library.saveCover(Data([0xFF, 0xD8, 0xFF, 0xD9]), for: album, file: false, embed: true) }
+    #expect(Tags.hasEmbeddedArt(good))
+}

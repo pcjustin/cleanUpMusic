@@ -23,6 +23,8 @@ final class Model: ObservableObject {
     @Published var root: URL?
     @Published var albums: [Album] = []
     @Published var changes: [Change] = []
+    @Published var splits: [AlbumSplit] = []
+    @Published var discs: [Change] = []
     @Published var scanning = false
     @Published var progress = 0
     @Published var message: String?
@@ -35,10 +37,30 @@ final class Model: ObservableObject {
         root = url
         albums = []
         changes = []
+        splits = []
+        discs = []
     }
 
     func scanCovers() { runScan(Library.scanCovers) { self.albums = $0 } }
     func scanChinese() { runScan(Library.scanChinese) { self.changes = $0 } }
+    func scanSplits() { runScan(Library.scanSplits) { self.splits = $0 } }
+    func scanDiscs() { runScan(Library.scanDiscs) { self.discs = $0 } }
+
+    func applyDiscs() {
+        let selected = discs.filter(\.selected)
+        runWrite({ Library.applyDiscs(selected) }) { self.scanDiscs() }
+    }
+
+    private func runWrite(_ work: @escaping () -> [String], then done: @escaping () -> Void) {
+        scanning = true
+        Task.detached {
+            let failures = work()
+            await MainActor.run {
+                self.scanning = false
+                if failures.isEmpty { done() } else { self.message = "\(failures.count) 筆失敗：\n" + failures.joined(separator: "\n") }
+            }
+        }
+    }
 
     private func runScan<T>(_ scan: @escaping (URL, (Int) -> Void) -> T, then apply: @escaping (T) -> Void) {
         guard let root, !scanning else { return }
@@ -104,6 +126,8 @@ struct ContentView: View {
             TabView {
                 CoversView().tabItem { Text("封面 (\(m.albums.count))") }
                 ChineseView().tabItem { Text("簡轉繁 (\(m.changes.count))") }
+                SplitsView().tabItem { Text("專輯分裂 (\(m.splits.count))") }
+                DiscsView().tabItem { Text("CD 編號 (\(m.discs.count))") }
             }
         }
         .frame(minWidth: 1000, minHeight: 650)

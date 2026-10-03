@@ -22,6 +22,20 @@ enum Tags {
         return out
     }
 
+    /// Reads many files at once; NAS latency dominates, so concurrency is a large win.
+    static func readAll(_ urls: [URL]) -> [[String: [String]]] {
+        let box = Box(count: urls.count)
+        DispatchQueue.concurrentPerform(iterations: urls.count) { i in box.set(i, read(urls[i])) }
+        return box.values
+    }
+
+    private final class Box: @unchecked Sendable {
+        private let lock = NSLock()
+        private(set) var values: [[String: [String]]]
+        init(count: Int) { values = Array(repeating: [:], count: count) }
+        func set(_ i: Int, _ v: [String: [String]]) { lock.lock(); values[i] = v; lock.unlock() }
+    }
+
     static func write(_ url: URL, _ fields: [String: [String]]) throws {
         guard let f = taglib_file_new(url.path), taglib_file_is_valid(f) != 0 else { throw TagError(url: url) }
         defer { taglib_file_free(f) }

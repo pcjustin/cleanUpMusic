@@ -16,6 +16,18 @@ struct Album: Identifiable {
     let artist: String
 }
 
+struct AlbumSplit: Identifiable {
+    struct Variant {
+        let album: String
+        let tracks: [URL]
+    }
+    let dir: URL
+    let variants: [Variant]
+    /// Values differ only by case, spacing, width or Simplified/Traditional: almost certainly one album.
+    let similar: Bool
+    var id: URL { dir }
+}
+
 enum ChangeKind: Hashable {
     case tag(String), file, folder
 
@@ -39,7 +51,7 @@ struct Change: Identifiable {
 }
 
 enum Library {
-    static let tagKeys = ["TITLE", "ARTIST", "ALBUM", "ALBUMARTIST"]
+    static let tagKeys = ["TITLE", "ARTIST", "ALBUM", "ALBUMARTIST", "DISCNUMBER", "DISCTOTAL"]
     static let audioExts: Set = ["flac", "mp3", "m4a", "wav", "aif", "aiff", "ape"]
     static let imageExts: Set = ["jpg", "jpeg", "png", "webp"]
     static let coverNames: Set = ["folder", "cover"]
@@ -75,7 +87,7 @@ enum Library {
             progress(i)
             let images = d.files.filter { imageExts.contains($0.pathExtension.lowercased()) }.map(fixJpeg)
             // ponytail: reads every track's tags to detect singles; sample a few tracks if NAS scans get slow.
-            let tags = d.tracks.map(Tags.read)
+            let tags = Tags.readAll(d.tracks)
             let byAlbum = Dictionary(grouping: d.tracks.indices) { tags[$0]["ALBUM"]?.first ?? "" }
             let split = byAlbum.count > 1
             for idxs in byAlbum.values.sorted(by: { $0[0] < $1[0] }) {
@@ -91,6 +103,113 @@ enum Library {
         return albums
     }
 
+    /// Folders whose tracks carry different ALBUM tags, which MinimServer shows as separate albums.
+    static func scanSplits(_ root: URL, progress: (Int) -> Void = { _ in }) -> [AlbumSplit] {
+        var splits: [AlbumSplit] = []
+        for (i, d) in audioDirs(root).dirs.enumerated() {
+            progress(i)
+            let albumOf = Dictionary(uniqueKeysWithValues: zip(d.tracks, Tags.readAll(d.tracks).map { $0["ALBUM"]?.first ?? "" }))
+            let byAlbum = Dictionary(grouping: d.tracks) { albumOf[$0]! }
+            guard byAlbum.count > 1 else { continue }
+            let variants = byAlbum.map { AlbumSplit.Variant(album: $0.key, tracks: $0.value) }
+                .sorted { $0.tracks[0].path < $1.tracks[0].path }
+            splits.append(AlbumSplit(dir: d.dir, variants: variants, similar: Set(variants.map { albumKey($0.album) }).count == 1))
+        }
+        return splits.sorted { ($0.similar ? 0 : 1, $0.dir.path) < ($1.similar ? 0 : 1, $1.dir.path) }
+    }
+
+    static func albumKey(_ album: String) -> String {
+        Chinese.toTraditional(album)
+            .folding(options: [.caseInsensitive, .widthInsensitive, .diacriticInsensitive], locale: nil)
+            .filter { !$0.isWhitespace && !$0.isPunctuation }
+    }
+
+    private static let discPattern = try! NSRegularExpression(
+        pattern: "(?<![A-Za-z])(?:cd|dis[ck])\\s*0*(\\d+)|碟\\s*0*(\\d+)", options: .caseInsensitive)
+
+    private static let discSuffix = try! NSRegularExpression(
+        pattern: "[\\s\\-–_:(\\[（【]*(?:(?<![A-Za-z])(?:cd|dis[ck])\\s*0*\\d+|碟\\s*0*\\d+)[\\s)\\]）】]*$", options: .caseInsensitive)
+
+    /// "Album CD1" / "Album (Disc 2)" → "Album"; nil when there is no trailing disc marker.
+    static func stripDisc(_ album: String) -> String? {
+        let stripped = discSuffix.stringByReplacingMatches(in: album, range: NSRange(album.startIndex..., in: album), withTemplate: "")
+            .trimmingCharacters(in: .whitespaces)
+        return stripped.isEmpty || stripped == album ? nil : stripped
+    }
+
+    static func discNumber(_ folder: String) -> Int? {
+        guard let m = discPattern.firstMatch(in: folder, range: NSRange(folder.startIndex..., in: folder)) else { return nil }
+        return (1...2).lazy.compactMap { Range(m.range(at: $0), in: folder).flatMap { Int(folder[$0]) } }.first
+    }
+
+    /// Proposes DISCNUMBER, DISCTOTAL and ALBUM `X [Disc n]` (MinimServer's disc-heading form) for tracks under
+    /// sibling folders named like CD1 / Disc 2 / 碟3 (tracks may sit in a subfolder such as CD1/FLAC).
+    /// All discs of a set share the most common ALBUM base, and a lone ALBUMARTIST value fills tracks lacking one.
+    /// A lone disc folder is skipped: there is nothing to merge it with.
+    static func scanDiscs(_ root: URL, progress: (Int) -> Void = { _ in }) -> [Change] {
+        let (dirs, rootDepth) = audioDirs(root)
+        var sets: [URL: [(tracks: [URL], n: Int)]] = [:]
+        for d in dirs {
+            var f = d.dir
+            while f.pathComponents.count > rootDepth {
+                if let n = discNumber(f.lastPathComponent) {
+                    sets[f.deletingLastPathComponent(), default: []].append((d.tracks, n))
+                    break
+                }
+                f = f.deletingLastPathComponent()
+            }
+        }
+        var changes: [Change] = []
+        var read = 0
+        for (parent, items) in sets.sorted(by: { $0.key.path < $1.key.path }) where Set(items.map(\.n)).count > 1 {
+            let total = String(Set(items.map(\.n)).count)
+            let name = parent.pathComponents.dropFirst(rootDepth).joined(separator: "/")
+            let group = name.isEmpty ? parent.lastPathComponent : name
+            let flat = items.flatMap { item in item.tracks.map { (url: $0, n: item.n) } }
+            let allTags = Tags.readAll(flat.map(\.url))
+            let tracks = zip(flat, allTags).map { (url: $0.url, n: $0.n, tags: $1) }
+            read += tracks.count
+            progress(read)
+            let bases = tracks.compactMap { $0.tags["ALBUM"]?.first.map { stripDisc($0) ?? $0 } }
+            let base = Dictionary(grouping: bases, by: { $0 }).max { ($0.value.count, $1.key) < ($1.value.count, $0.key) }?.key
+            let artists = Set(tracks.compactMap { $0.tags["ALBUMARTIST"]?.first })
+            for (t, n, tags) in tracks {
+                let old = tags["DISCNUMBER"]?.first ?? ""
+                if Int(old.prefix(while: \.isNumber)) != n {
+                    changes.append(Change(kind: .tag("DISCNUMBER"), url: t, old: old, new: String(n), group: group))
+                }
+                let oldTotal = tags["DISCTOTAL"]?.first ?? ""
+                if oldTotal != total {
+                    changes.append(Change(kind: .tag("DISCTOTAL"), url: t, old: oldTotal, new: total, group: group))
+                }
+                if let album = tags["ALBUM"]?.first, let base, case let new = base + " [Disc \(n)]", new != album {
+                    changes.append(Change(kind: .tag("ALBUM"), url: t, old: album, new: new, group: group))
+                }
+                if artists.count == 1, tags["ALBUMARTIST"] == nil {
+                    changes.append(Change(kind: .tag("ALBUMARTIST"), url: t, old: "", new: artists.first!, group: group))
+                }
+            }
+        }
+        return changes
+    }
+
+    static func applyDiscs(_ changes: [Change]) -> [String] {
+        var failures: [String] = []
+        for (url, items) in Dictionary(grouping: changes, by: \.url) {
+            let fields = Dictionary(items.compactMap { c -> (String, [String])? in
+                guard case .tag(let key) = c.kind else { return nil }
+                return (key, [c.new])
+            }, uniquingKeysWith: { $1 })
+            do {
+                try Tags.write(url, fields)
+                for c in items { log("tag \(c.kind.label)", c.old, c.new) }
+            } catch {
+                failures.append(describe(error))
+            }
+        }
+        return failures
+    }
+
     static func scanChinese(_ root: URL, progress: (Int) -> Void = { _ in }) -> [Change] {
         let (dirs, rootDepth) = audioDirs(root)
         let relative = { (u: URL) in u.pathComponents.dropFirst(rootDepth).joined(separator: "/") }
@@ -99,7 +218,7 @@ enum Library {
         var dirGroup: [String: String] = [:]
         for (i, d) in dirs.enumerated() {
             progress(i)
-            let tags = d.tracks.map(Tags.read)
+            let tags = Tags.readAll(d.tracks)
             let group = albumGroup(tags[0]) ?? relative(d.dir)
             dirGroup[d.dir.path] = group
 
@@ -178,9 +297,17 @@ enum Library {
         }
         if embed {
             let mime = "image/" + (imageExt(data) == "jpg" ? "jpeg" : imageExt(data))
+            var failed: [String] = []
             for t in album.tracks {
-                try Tags.embedArt(t, data, mime: mime)
-                log("cover embed", "", t.path)
+                do {
+                    try Tags.embedArt(t, data, mime: mime)
+                    log("cover embed", "", t.path)
+                } catch {
+                    failed.append(t.lastPathComponent)
+                }
+            }
+            if !failed.isEmpty {
+                throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "\(failed.count) 個檔案無法嵌入（其餘已完成）：\n" + failed.joined(separator: "\n")])
             }
         }
     }
