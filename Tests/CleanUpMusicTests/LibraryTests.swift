@@ -263,3 +263,58 @@ private func touch(_ url: URL) {
     #expect(Tags.read(tracks[0])["ALBUM"] == ["後來"])
     #expect(Tags.read(tracks[0])["DISCNUMBER"] == ["1"])
 }
+
+private func flac(_ blocks: [(type: UInt8, data: [UInt8])]) -> Data {
+    var out = Data("fLaC".utf8)
+    for (i, b) in blocks.enumerated() {
+        let n = b.data.count
+        out += [b.type | (i == blocks.count - 1 ? 0x80 : 0), UInt8(n >> 16 & 0xFF), UInt8(n >> 8 & 0xFF), UInt8(n & 0xFF)] + b.data
+    }
+    return out
+}
+
+private func vorbisComment(_ entries: [[UInt8]]) -> [UInt8] {
+    func le32(_ n: Int) -> [UInt8] { (0..<4).map { UInt8(n >> ($0 * 8) & 0xFF) } }
+    return le32(0) + le32(entries.count) + entries.flatMap { le32($0.count) + $0 }
+}
+
+@Test func flacFastPathMatchesTagLib() throws {
+    let dir = try tempDir()
+    func be32(_ n: Int) -> [UInt8] { (0..<4).reversed().map { UInt8(n >> ($0 * 8) & 0xFF) } }
+    let art = [UInt8](repeating: 0xAB, count: 100_000)
+    let picture = be32(3) + be32(10) + Array("image/jpeg".utf8) + [be32(0), be32(0), be32(0), be32(0), be32(0), be32(art.count)].flatMap { $0 } + art
+    let streamInfo = [UInt8](repeating: 0, count: 34)
+    let comment = vorbisComment([
+        Array("title=后来".utf8), Array("ARTIST=A".utf8), Array("ARTIST=B".utf8), Array("ALBUM=".utf8),
+        Array("ALBUMARTIST=X".utf8) + [0] + Array("junk".utf8), Array("DISCNUMBER=".utf8) + [0xC3, 0x28],
+    ])
+    let f = dir.appendingPathComponent("t.flac")
+    try flac([(0, streamInfo), (6, picture), (4, comment), (1, [UInt8](repeating: 0, count: 8192))]).write(to: f)
+    #expect(Tags.readFLAC(f.path) == ["TITLE": ["后来"], "ARTIST": ["A", "B"], "ALBUMARTIST": ["X"], "PICTURE": []])
+    #expect(Tags.readFLAC(f.path) == Tags.readTagLib(f))
+
+    let empty = dir.appendingPathComponent("e.flac")
+    try flac([(0, streamInfo), (4, vorbisComment([]))]).write(to: empty)
+    #expect(Tags.readFLAC(empty.path) == nil)
+
+    // Zero bytes after the cover read as an empty block, which TagLib rejects; the scan must too.
+    let broken = dir.appendingPathComponent("b.flac")
+    try flac([(0, streamInfo), (4, comment), (6, picture), (0, [])]).write(to: broken)
+    #expect(Tags.readFLAC(broken.path) == nil)
+    #expect(Tags.read(broken) == Tags.readTagLib(broken))
+}
+
+@Test func rescanSeesTagsWrittenEvenIfListingShowsOldDate() throws {
+    let f = try tempDir().appendingPathComponent("t.flac")
+    try makeAudio(f)
+    try Tags.write(f, ["ALBUM": ["A"]])
+    let fm = FileManager.default, old = Date(timeIntervalSince1970: 1_700_000_000)
+    try fm.setAttributes([.modificationDate: old], ofItemAtPath: f.path)
+    let scan = { Tags.readAll([URL(fileURLWithPath: f.path)])[0]["ALBUM"] }
+    #expect(scan() == ["A"])
+    let size = try fm.attributesOfItem(atPath: f.path)[.size] as? Int
+    try Tags.write(f, ["ALBUM": ["B"]])
+    try fm.setAttributes([.modificationDate: old], ofItemAtPath: f.path)
+    #expect(try fm.attributesOfItem(atPath: f.path)[.size] as? Int == size)
+    #expect(scan() == ["B"])
+}

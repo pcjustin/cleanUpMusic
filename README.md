@@ -16,6 +16,8 @@ macOS SwiftUI tool for tidying a MinimServer music library (FLAC, MP3, ALAC, WAV
 
 Applying skips any tag that changed since its scan (e.g. after applying another tab) and says so; rescan to pick it up.
 
+Scans keep each file's tags for the session and re-read only files whose size or modification date changed, so switching tabs or rescanning after applying is quick; restart the app after editing tags with a tool that preserves modification dates.
+
 Every rename, tag write, saved cover and removed cover file is appended to `~/Library/Logs/CleanUpMusic/changes.log` (`time  action  old  new`, plus the file for tag writes).
 
 ## Requirements

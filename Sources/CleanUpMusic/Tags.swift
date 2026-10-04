@@ -9,6 +9,10 @@ struct TagError: LocalizedError {
 enum Tags {
     /// Reads `Library.tagKeys`, plus `"PICTURE": []` when the file has embedded art.
     static func read(_ url: URL) -> [String: [String]] {
+        (url.pathExtension.lowercased() == "flac" ? readFLAC(url.path) : nil) ?? readTagLib(url)
+    }
+
+    static func readTagLib(_ url: URL) -> [String: [String]] {
         guard let f = taglib_file_new(url.path) else { return [:] }
         defer { taglib_file_free(f) }
         var out: [String: [String]] = [:]
@@ -24,22 +28,97 @@ enum Tags {
         return out
     }
 
-    /// Reads many files at once; NAS latency dominates, so concurrency is a large win.
-    static func readAll(_ urls: [URL], progress: (Int) -> Void = { _ in }) -> [[String: [String]]] {
-        let box = Box(count: urls.count)
-        DispatchQueue.concurrentPerform(iterations: urls.count) { i in progress(box.set(i, read(urls[i]))) }
-        return box.values
+    /// FLAC tags straight from the metadata blocks: TagLib reads every block whole, cover art and padding included
+    /// (hundreds of KB per track over SMB), while this reads 16 KB and seeks past big blocks. Every block header is
+    /// still checked; nil leaves the file to TagLib wherever its result could differ: no `fLaC` at the start, a broken
+    /// block chain, or no text fields (TagLib then uses an ID3v1 tag).
+    static func readFLAC(_ path: String) -> [String: [String]]? {
+        let fd = open(path, O_RDONLY)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        _ = fcntl(fd, F_NOCACHE, 1) // cold NAS reads took ~40% less time than through the page cache
+        var chunk: [UInt8] = [], chunkStart = 0
+        func bytes(_ offset: Int, _ count: Int) -> ArraySlice<UInt8>? {
+            if offset < chunkStart || offset + count > chunkStart + chunk.count {
+                chunk = [UInt8](repeating: 0, count: max(count, 16 << 10))
+                let n = chunk.withUnsafeMutableBytes { pread(fd, $0.baseAddress, $0.count, off_t(offset)) }
+                guard n >= count else { return nil }
+                chunk.removeSubrange(n...)
+                chunkStart = offset
+            }
+            return chunk[(offset - chunkStart)...].prefix(count)
+        }
+        guard bytes(0, 4) == ArraySlice("fLaC".utf8) else { return nil }
+        var offset = 4, comment: ArraySlice<UInt8>?, picture = false, last = false
+        while !last {
+            guard let h = bytes(offset, 4) else { return nil }
+            let type = h[h.startIndex] & 0x7F, length = h.dropFirst().reduce(0) { $0 << 8 | Int($1) }
+            last = h[h.startIndex] & 0x80 != 0
+            // TagLib's validity rules: STREAMINFO first, only PADDING and SEEKTABLE may be empty.
+            guard offset > 4 || type == 0, length > 0 || type == 1 || type == 3 else { return nil }
+            if type == 4, comment == nil {
+                guard let c = bytes(offset + 4, length) else { return nil }
+                comment = c
+            }
+            picture = picture || type == 6
+            offset += 4 + length
+        }
+        guard offset <= lseek(fd, 0, SEEK_END) else { return nil }
+        let pictureFields: Set = ["METADATA_BLOCK_PICTURE", "COVERART"]
+        guard let fields = comment.flatMap(vorbisFields), !fields.keys.allSatisfy(pictureFields.contains) else { return nil }
+        var out = fields.filter { Library.tagKeys.contains($0.key) }
+        if picture || fields.keys.contains(where: pictureFields.contains) { out["PICTURE"] = [] }
+        return out
     }
 
-    private final class Box: @unchecked Sendable {
-        private let lock = NSLock()
-        private(set) var values: [[String: [String]]]
-        init(count: Int) { values = Array(repeating: [:], count: count) }
-        private var done = 0
-        func set(_ i: Int, _ v: [String: [String]]) -> Int { lock.lock(); defer { lock.unlock() }; values[i] = v; done += 1; return done }
+    /// A Vorbis comment's fields as TagLib's XiphComment keeps them: keys upper-cased, fields with an invalid key
+    /// or an empty or non-UTF-8 value dropped, values cut at a NUL like the C strings TagLib hands back.
+    private static func vorbisFields(_ d: ArraySlice<UInt8>) -> [String: [String]]? {
+        var p = d.startIndex
+        func take(_ n: Int) -> ArraySlice<UInt8>? {
+            guard d.endIndex - p >= n else { return nil }
+            defer { p += n }
+            return d[p..<p + n]
+        }
+        func le32() -> Int? { take(4)?.reversed().reduce(0) { $0 << 8 | Int($1) } }
+        guard let vendor = le32(), take(vendor) != nil, let count = le32() else { return nil }
+        var fields: [String: [String]] = [:]
+        for _ in 0..<count {
+            guard let n = le32(), let entry = take(n) else { return nil }
+            guard let eq = entry.firstIndex(of: UInt8(ascii: "=")), eq > entry.startIndex,
+                  entry[..<eq].allSatisfy({ (0x20...0x7D).contains($0) }),
+                  let value = String(bytes: entry[(eq + 1)...], encoding: .utf8), !value.isEmpty else { continue }
+            fields[String(decoding: entry[..<eq], as: UTF8.self).uppercased(), default: []].append(String(value.prefix { $0 != "\0" }))
+        }
+        return fields
+    }
+
+    /// Tags by path with the size and modification date they were read at.
+    private static let cache = Locked<[String: (size: Int?, date: Date, tags: [String: [String]])]>([:])
+
+    /// Reads many files, 32 at a time: NAS round trips, not CPU, are the limit. A file whose size and modification
+    /// date (prefetched by the folder walk) still match the cache isn't read again, so rescans only read changes.
+    static func readAll(_ urls: [URL], progress: (Int) -> Void = { _ in }) -> [[String: [String]]] {
+        let done = Locked(0)
+        return urls.concurrentMap { url in
+            let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            let cached = cache { $0[url.path] }.flatMap { $0.date == v?.contentModificationDate && $0.size == v?.fileSize ? $0.tags : nil }
+            let tags = cached ?? read(url)
+            if let date = v?.contentModificationDate { cache { $0[url.path] = (v?.fileSize, date, tags) } }
+            let n = done { $0 += 1; return $0 }
+            if n % 100 == 0 || n == urls.count { progress(n) }
+            return tags
+        }
+    }
+
+    /// Writes made here can land within the NAS listing cache's lifetime, so the folder walk may still report the
+    /// old modification date; dropping the entry makes the next scan read the file again.
+    private static func forget(_ url: URL) {
+        cache { _ = $0.removeValue(forKey: url.path) }
     }
 
     static func write(_ url: URL, _ fields: [String: [String]]) throws {
+        defer { forget(url) }
         guard let f = taglib_file_new(url.path), taglib_file_is_valid(f) != 0 else { throw TagError(url: url) }
         defer { taglib_file_free(f) }
         for (key, values) in fields {
@@ -61,6 +140,7 @@ enum Tags {
     }
 
     static func embedArt(_ url: URL, _ data: Data, mime: String) throws {
+        defer { forget(url) }
         guard let f = taglib_file_new(url.path), taglib_file_is_valid(f) != 0 else { throw TagError(url: url) }
         defer { taglib_file_free(f) }
         let ok = data.withUnsafeBytes { raw in
@@ -77,5 +157,35 @@ enum Tags {
         var pic = TagLib_Complex_Property_Picture_Data()
         taglib_picture_from_complex_property(props, &pic)
         return pic.data.map { Data(bytes: $0, count: Int(pic.size)) }
+    }
+}
+
+/// A value shared by concurrent NAS calls; calling it runs the closure on the value under the lock.
+final class Locked<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: T
+    init(_ value: T) { self.value = value }
+    func callAsFunction<R>(_ body: (inout T) -> R) -> R { lock.withLock { body(&value) } }
+}
+
+extension Array {
+    /// `map` on up to 32 threads. NAS calls mostly wait on the network, so one thread per core leaves it idle.
+    /// Serial queues always get a thread; global queues may not, when callers blocked in Swift tasks hold the pool.
+    func concurrentMap<T>(_ transform: (Element) -> T) -> [T] {
+        let state = Locked((results: [T?](repeating: nil, count: count), next: 0))
+        let finished = DispatchGroup()
+        withoutActuallyEscaping(transform) { transform in
+            for _ in 0..<Swift.min(32, count) {
+                DispatchQueue(label: "nas").async(group: finished) {
+                    func claim() -> Int? { state { s in guard s.next < count else { return nil }; defer { s.next += 1 }; return s.next } }
+                    while let i = claim() {
+                        let r = transform(self[i])
+                        state { $0.results[i] = r }
+                    }
+                }
+            }
+            finished.wait()
+        }
+        return state { $0.results.map { $0! } }
     }
 }
