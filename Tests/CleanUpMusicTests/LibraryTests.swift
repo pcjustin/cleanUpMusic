@@ -166,6 +166,7 @@ private func touch(_ url: URL) {
         ("Set/CD1/stray.flac", ["ALBUM": ["Show 1_2"]]),
         ("Set/CD2/FLAC/b.flac", ["ALBUM": ["Show"], "ALBUMARTIST": ["Zimmer"]]),
         ("Set/CD2/FLAC/c.flac", ["ALBUM": ["Show"], "ALBUMARTIST": ["Zimmer"]]),
+        ("Set/CD3/d.flac", ["ALBUM": ["Show"], "ALBUMARTIST": ["齊默"]]),
     ]
     for (path, tags) in tracks {
         let f = root.appendingPathComponent(path)
@@ -173,8 +174,8 @@ private func touch(_ url: URL) {
         try Tags.write(f, tags)
     }
     let changes = Library.scanDiscs(root)
-    #expect(Set(changes.filter { $0.kind == .tag("ALBUM") }.map(\.new)) == ["Show [Disc 1]", "Show [Disc 2]"])
-    #expect(changes.filter { $0.kind == .tag("ALBUMARTIST") }.count == 2)
+    #expect(Set(changes.filter { $0.kind == .tag("ALBUM") }.map(\.new)) == ["Show [Disc 1]", "Show [Disc 2]", "Show [Disc 3]"])
+    #expect(changes.filter { $0.kind == .tag("ALBUMARTIST") }.map(\.new) == ["Zimmer", "Zimmer", "Zimmer"])
     #expect(Library.apply(changes).isEmpty)
     #expect(Library.scanDiscs(root).isEmpty)
 }

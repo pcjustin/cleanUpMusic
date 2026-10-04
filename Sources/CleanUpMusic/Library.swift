@@ -169,7 +169,7 @@ enum Library {
 
     /// Proposes DISCNUMBER, DISCTOTAL and ALBUM `X [Disc n]` (MinimServer's disc-heading form) for tracks under
     /// sibling folders named like CD1 / Disc 2 / 碟3 (tracks may sit in a subfolder such as CD1/FLAC).
-    /// All discs of a set share the most common ALBUM base, and a lone ALBUMARTIST value fills tracks lacking one.
+    /// All discs of a set share the most common ALBUM base and ALBUMARTIST, since MinimServer splits albums on either.
     /// A lone disc folder is skipped: there is nothing to merge it with.
     static func scanDiscs(_ root: URL, progress: (Int) -> Void = { _ in }) -> [Change] {
         let (dirs, rootDepth) = audioDirs(root)
@@ -193,9 +193,8 @@ enum Library {
             let group = relativePath(parent, rootDepth)
             let tracks = items.flatMap { item in item.tracks.map { (url: $0, n: item.n, tags: tagsOf[$0]!) } }
             let bases = tracks.compactMap { $0.tags["ALBUM"]?.first.map(albumBase) }.filter { !$0.isEmpty }
-            let base = Dictionary(grouping: bases, by: { $0 }).max { ($0.value.count, $1.key) < ($1.value.count, $0.key) }?.key
-                ?? parent.lastPathComponent
-            let artists = Set(tracks.compactMap { $0.tags["ALBUMARTIST"]?.first })
+            let base = mostCommon(bases) ?? parent.lastPathComponent
+            let artist = mostCommon(tracks.compactMap { $0.tags["ALBUMARTIST"]?.first })
             for (t, n, tags) in tracks {
                 func propose(_ key: String, _ new: String) {
                     let old = (tags[key] ?? []).joined(separator: "; ")
@@ -204,10 +203,14 @@ enum Library {
                 if Int((tags["DISCNUMBER"]?.first ?? "").prefix(while: \.isNumber)) != n { propose("DISCNUMBER", String(n)) }
                 propose("DISCTOTAL", total)
                 if tags["ALBUM"] != nil { propose("ALBUM", base + " [Disc \(n)]") }
-                if artists.count == 1, tags["ALBUMARTIST"] == nil { propose("ALBUMARTIST", artists.first!) }
+                if let artist { propose("ALBUMARTIST", artist) }
             }
         }
         return changes
+    }
+
+    private static func mostCommon(_ values: [String]) -> String? {
+        Dictionary(grouping: values, by: { $0 }).max { ($0.value.count, $1.key) < ($1.value.count, $0.key) }?.key
     }
 
     static func scanChinese(_ root: URL, progress: (Int) -> Void = { _ in }) -> [Change] {
