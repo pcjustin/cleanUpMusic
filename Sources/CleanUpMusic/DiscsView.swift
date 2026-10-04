@@ -11,7 +11,7 @@ struct DiscsView: View {
         VStack(alignment: .leading) {
             HStack {
                 Button("掃描 CD 資料夾") { m.scanDiscs() }.disabled(m.root == nil || m.scanning)
-                Text("同一層有 CD1 / Disc 2 / 碟3 之類資料夾時，依資料夾名稱補上 DISCNUMBER，並去掉 ALBUM 結尾的 CD 標記").foregroundStyle(.secondary)
+                Text("同一層有 CD1 / Disc 2 / 碟3 之類資料夾時，依資料夾名稱補上 DISCNUMBER、DISCTOTAL，並把 ALBUM 改成「專輯 [Disc n]」").foregroundStyle(.secondary)
                 Spacer()
                 Button("全選專輯") { setSelected(true) }
                 Button("全不選") { setSelected(false) }

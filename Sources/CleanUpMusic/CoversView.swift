@@ -59,6 +59,7 @@ struct CoverPicker: View {
     @State private var query = ""
     @State private var results: [CoverCandidate] = []
     @State private var searching = false
+    @State private var searchTask: Task<Void, Never>?
     @State private var urlText = ""
     @State private var parentImages: [URL] = []
     @State private var current: [(name: String, image: NSImage)] = []
@@ -83,12 +84,13 @@ struct CoverPicker: View {
                 }
             }
             if album.split { Text("此資料夾含多個專輯（單曲），只能嵌入 metadata").foregroundStyle(.secondary) }
-            if case .unreadable(let imgs) = album.cover {
+            if !album.split, case .unreadable(let imgs) = album.cover {
                 imageRow("資料夾裡現有的圖（檔名 MinimServer 讀不到）", imgs, button: "設為封面") { try Library.promote($0) }
             }
             if !parentImages.isEmpty {
+                let album = album, file = toFile, embed = toEmbed
                 imageRow("上一層資料夾的圖", parentImages, button: "複製為封面") {
-                    try Library.saveCover(Data(contentsOf: $0), for: album, file: toFile, embed: toEmbed)
+                    try Library.saveCover(Data(contentsOf: $0), for: album, file: file, embed: embed)
                 }
             }
             HStack {
@@ -118,22 +120,23 @@ struct CoverPicker: View {
             }
             HStack {
                 TextField("貼上圖片網址", text: $urlText)
-                Button("使用網址") { if let u = URL(string: urlText) { save(from: u) } }
+                Button("使用網址") { if let u = URL(string: urlText.trimmingCharacters(in: .whitespacesAndNewlines)) { save(from: u) } }
                 Button("選擇檔案…", action: pickFile)
                 Text("或把圖片拖進來").foregroundStyle(.secondary)
             }
         }
         .padding()
+        .disabled(m.scanning)
         .dropDestination(for: URL.self) { urls, _ in
             guard let u = urls.first else { return false }
             save(from: u)
             return true
         }
-        .task(id: album.cover) {
+        .task(id: m.coverRevision) {
             let a = album
             current = await Task.detached {
                 var out: [(name: String, image: NSImage)] = []
-                let files = a.split ? [] : (try? FileManager.default.contentsOfDirectory(at: a.dir, includingPropertiesForKeys: nil)) ?? []
+                let files = (try? FileManager.default.contentsOfDirectory(at: a.dir, includingPropertiesForKeys: nil)) ?? []
                 for u in files.filter(Library.isMinimCover).sorted(by: { $0.path < $1.path }) {
                     if let i = NSImage(contentsOf: u) { out.append((u.lastPathComponent, i)) }
                 }
@@ -153,7 +156,7 @@ struct CoverPicker: View {
         }
     }
 
-    private func imageRow(_ title: String, _ images: [URL], button: String, action: @escaping (URL) throws -> Void) -> some View {
+    private func imageRow(_ title: String, _ images: [URL], button: String, action: @escaping @Sendable (URL) throws -> Void) -> some View {
         VStack(alignment: .leading) {
             Text(title).bold()
             ScrollView(.horizontal) {
@@ -186,17 +189,22 @@ struct CoverPicker: View {
     }
 
     private func search() {
+        searchTask?.cancel()
         searching = true
-        Task {
-            results = await CoverSearch.search(query)
+        let q = query
+        searchTask = Task {
+            let found = await CoverSearch.search(q)
+            guard !Task.isCancelled else { return }
+            results = found
             searching = false
         }
     }
 
     private func save(from url: URL) {
+        let album = album, file = toFile, embed = toEmbed
         m.fixCover(album) {
             let data = url.isFileURL ? try Data(contentsOf: url) : try await URLSession.shared.data(from: url).0
-            try Library.saveCover(data, for: album, file: toFile, embed: toEmbed)
+            try Library.saveCover(data, for: album, file: file, embed: embed)
         }
     }
 

@@ -2,7 +2,13 @@ import Foundation
 import Testing
 @testable import CleanUpMusic
 
+/// Keeps test runs out of the real change log; every test touching files calls `tempDir()` first.
+private let testLog: Void = {
+    Library.logURL = FileManager.default.temporaryDirectory.appendingPathComponent("CleanUpMusicTests.log")
+}()
+
 private func tempDir() throws -> URL {
+    _ = testLog
     let d = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
     return d
@@ -35,9 +41,9 @@ private func touch(_ url: URL) {
         try Tags.write(f, ["TITLE": ["后来"], "ARTIST": ["刘若英", "陈升"]])
         #expect(Tags.read(f)["TITLE"] == ["后来"])
         #expect(Tags.read(f)["ARTIST"] == ["刘若英", "陈升"])
-        #expect(!Tags.hasEmbeddedArt(f))
+        #expect(Tags.read(f)["PICTURE"] == nil)
         try Tags.embedArt(f, Data([0xFF, 0xD8, 0xFF, 0xD9]), mime: "image/jpeg")
-        #expect(Tags.hasEmbeddedArt(f))
+        #expect(Tags.read(f)["PICTURE"] != nil)
         #expect(Tags.embeddedArt(f) == Data([0xFF, 0xD8, 0xFF, 0xD9]))
     }
 }
@@ -83,6 +89,7 @@ private func touch(_ url: URL) {
     #expect(Library.imageExt(Data([0x89, 0x50, 0x4E, 0x47, 0, 0, 0, 0])) == "png")
     #expect(Library.imageExt(Data("RIFF\0\0\0\0WEBPVP8 ".utf8)) == "webp")
     #expect(Library.imageExt(Data([0xFF, 0xD8, 0xFF])) == "jpg")
+    #expect(Library.imageExt(Data("<html>".utf8)) == nil)
 }
 
 @Test func groupsMultiDiscAlbumWithItsFolders() throws {
@@ -147,9 +154,9 @@ private func touch(_ url: URL) {
     try makeAudio(lone)
     let changes = Library.scanDiscs(root)
     #expect(changes.map(\.new) == ["1", "2", "Album [Disc 1]", "2", "2", "Album [Disc 2]"])
-    #expect(Library.applyDiscs(changes).isEmpty)
+    #expect(Library.apply(changes).isEmpty)
     #expect(Library.scanDiscs(root).isEmpty)
-    #expect(["Album CD1", "Album - Disc 02", "Album 碟3", "Album", "CD1"].map(Library.stripDisc) == ["Album", "Album", "Album", nil, nil])
+    #expect(["Album CD1", "Album - Disc 02", "Album 碟3", "Album", "CD1"].map(Library.albumBase) == ["Album", "Album", "Album", "Album", ""])
 }
 
 @Test func discsInSubfoldersShareAlbumBase() throws {
@@ -168,7 +175,7 @@ private func touch(_ url: URL) {
     let changes = Library.scanDiscs(root)
     #expect(Set(changes.filter { $0.kind == .tag("ALBUM") }.map(\.new)) == ["Show [Disc 1]", "Show [Disc 2]"])
     #expect(changes.filter { $0.kind == .tag("ALBUMARTIST") }.count == 2)
-    #expect(Library.applyDiscs(changes).isEmpty)
+    #expect(Library.apply(changes).isEmpty)
     #expect(Library.scanDiscs(root).isEmpty)
 }
 
@@ -182,7 +189,7 @@ private func touch(_ url: URL) {
     #expect(Library.albumBase(" [Disc 1] [Disc 2]") == "")
     let changes = Library.scanDiscs(root)
     #expect(Set(changes.filter { $0.kind == .tag("ALBUM") }.map(\.new)) == ["OST [Disc 1]", "OST [Disc 2]"])
-    #expect(Library.applyDiscs(changes).isEmpty)
+    #expect(Library.apply(changes).isEmpty)
     #expect(Library.scanDiscs(root).isEmpty)
 }
 
@@ -193,5 +200,66 @@ private func touch(_ url: URL) {
     try makeAudio(good)
     let album = Album(dir: root, tracks: [broken, good], cover: .missing, title: "", artist: "")
     #expect(throws: (any Error).self) { try Library.saveCover(Data([0xFF, 0xD8, 0xFF, 0xD9]), for: album, file: false, embed: true) }
-    #expect(Tags.hasEmbeddedArt(good))
+    #expect(Tags.read(good)["PICTURE"] != nil)
+}
+
+@Test func embeddedArtLookupClosesTheFile() throws {
+    let f = try tempDir().appendingPathComponent("t.flac")
+    try makeAudio(f)
+    let openFiles = { (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? 0 }
+    let before = openFiles()
+    for _ in 0..<200 { _ = Tags.embeddedArt(f) }
+    #expect(openFiles() - before < 100)
+}
+
+@Test func saveCoverRejectsNonImagesAndKeepsOldCoverWhenWriteFails() throws {
+    let dir = try tempDir()
+    let album = Album(dir: dir, tracks: [dir.appendingPathComponent("01.flac")], cover: .ok, title: "", artist: "")
+    let old = dir.appendingPathComponent("cover.png")
+    touch(old)
+    #expect(throws: (any Error).self) { try Library.saveCover(Data("<html>404</html>".utf8), for: album, file: true, embed: false) }
+    #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("cover.jpg").path))
+    try FileManager.default.createDirectory(at: dir.appendingPathComponent("cover.jpg"), withIntermediateDirectories: false)
+    #expect(throws: (any Error).self) { try Library.saveCover(Data([0xFF, 0xD8, 0xFF, 0xD9]), for: album, file: true, embed: false) }
+    #expect(FileManager.default.fileExists(atPath: old.path))
+}
+
+@Test func savedCoverReplacesFolderAndCoverFiles() throws {
+    let dir = try tempDir()
+    let album = Album(dir: dir, tracks: [dir.appendingPathComponent("01.flac")], cover: .ok, title: "", artist: "")
+    for name in ["folder.jpg", "folder.png", "cover.webp", "front.jpg"] { touch(dir.appendingPathComponent(name)) }
+    try Library.saveCover(Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), for: album, file: true, embed: false)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted() == ["cover.png", "front.jpg"])
+}
+
+@Test func rootLevelTracksAreGroupedUnderTheRootName() throws {
+    let root = try tempDir()
+    let f = root.appendingPathComponent("后来.flac")
+    try makeAudio(f)
+    try Tags.write(f, ["TITLE": ["后来"]])
+    let changes = Library.scanChinese(root)
+    #expect(!changes.isEmpty)
+    #expect(changes.allSatisfy { $0.group == root.lastPathComponent })
+}
+
+@Test func multiValuedTagsConvertPerValue() throws {
+    let f = try tempDir().appendingPathComponent("t.flac")
+    try makeAudio(f)
+    try Tags.write(f, ["ARTIST": ["刘若英", "陈升"]])
+    #expect(Library.apply(Library.scanChinese(f.deletingLastPathComponent())).isEmpty)
+    #expect(Tags.read(f)["ARTIST"] == ["刘若英", "陈升"].map(Chinese.toTraditional))
+}
+
+@Test func staleTagChangesAreSkipped() throws {
+    let root = try tempDir()
+    let tracks = (1...2).map { root.appendingPathComponent("后来/CD\($0)/t.flac") }
+    for f in tracks {
+        try makeAudio(f)
+        try Tags.write(f, ["ALBUM": ["后来"]])
+    }
+    let discs = Library.scanDiscs(root)
+    #expect(Library.apply(Library.scanChinese(root).filter { $0.kind == .tag("ALBUM") }).isEmpty)
+    #expect(Library.apply(discs).count == 2)
+    #expect(Tags.read(tracks[0])["ALBUM"] == ["後來"])
+    #expect(Tags.read(tracks[0])["DISCNUMBER"] == ["1"])
 }

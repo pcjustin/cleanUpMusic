@@ -7,14 +7,16 @@ macOS SwiftUI tool for tidying a MinimServer music library (FLAC, MP3, ALAC, WAV
 - **Covers** — lists album folders MinimServer would show without artwork. An album counts as covered when its folder has `folder|cover.jpg|png|webp` or the first track has embedded art.
   - `cover.jpeg` / `folder.jpeg` are renamed to `.jpg` automatically during the scan (MinimServer ignores `.jpeg`).
   - Folders with an image MinimServer can't see (e.g. `front.jpg`) get a one-click rename to `cover.*`.
-  - Missing covers: pick from iTunes / Deezer search results, or set one manually (file, URL, drag & drop). Saved as `cover.<jpg|png|webp>` in the album folder; audio files are not touched.
+  - Missing or replaced covers: pick from iTunes / Deezer search results, or set one manually (file, URL, drag & drop). Saved as `cover.<jpg|png|webp>` in the album folder, removing any other `folder.*` / `cover.*` image (MinimServer would show `folder.*` first), and/or embedded in every track. A folder holding several albums (e.g. singles) can only embed, since a folder image would show on all of them.
 - **Simplified → Traditional** — finds Simplified Chinese in tags (TITLE, ARTIST, ALBUM, ALBUMARTIST), file names and folder names, converted with OpenCC `s2tw`. Nothing changes until you tick rows and press apply.
   - Changes are grouped per album so one tick converts its folder names, file names and tags together. Tracks sharing ALBUM + album artist (compared after conversion) form one album, so CD1/CD2 folders merge; without an ALBUM or artist tag the folder is the album.
   - A parent folder joins the album when everything beneath it belongs to that album; otherwise (e.g. an artist folder) it is its own group.
 - **Album splits** — lists folders whose tracks carry different ALBUM tags, which MinimServer shows as separate albums. Detection only: each ALBUM value is listed with its tracks and nothing is written; folders where the values differ only by case, spacing, punctuation or Simplified/Traditional are flagged and sorted first.
 - **CD numbers** — when sibling folders are named like `CD1` / `Disc 2` / `碟3`, proposes `DISCNUMBER` from the folder name and `DISCTOTAL` (number of disc folders) for tracks that lack them, and rewrites ALBUM as `Album [Disc n]` (replacing any trailing CD/Disc marker), the form MinimServer turns into Disc 1 / Disc 2 headings (tracks may sit in a subfolder like `CD1/FLAC`; discs of one set share the most common ALBUM name, and a lone ALBUMARTIST fills tracks lacking it); DISCNUMBER alone only makes it number the tracks continuously. Tick rows and apply; tag writes are the only change.
 
-Every rename, tag write and saved cover is appended to `~/Library/Logs/CleanUpMusic/changes.log` (`time  action  old  new`).
+Applying skips any tag that changed since its scan (e.g. after applying another tab) and says so; rescan to pick it up.
+
+Every rename, tag write, saved cover and removed cover file is appended to `~/Library/Logs/CleanUpMusic/changes.log` (`time  action  old  new`, plus the file for tag writes).
 
 ## Requirements
 

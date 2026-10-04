@@ -7,6 +7,7 @@ struct TagError: LocalizedError {
 }
 
 enum Tags {
+    /// Reads `Library.tagKeys`, plus `"PICTURE": []` when the file has embedded art.
     static func read(_ url: URL) -> [String: [String]] {
         guard let f = taglib_file_new(url.path) else { return [:] }
         defer { taglib_file_free(f) }
@@ -19,6 +20,7 @@ enum Tags {
             while let v = values[i] { list.append(String(cString: v)); i += 1 }
             if !list.isEmpty { out[key] = list }
         }
+        if hasPicture(f) { out["PICTURE"] = [] }
         return out
     }
 
@@ -47,9 +49,7 @@ enum Tags {
         guard taglib_file_save(f) != 0 else { throw TagError(url: url) }
     }
 
-    static func hasEmbeddedArt(_ url: URL) -> Bool {
-        guard let f = taglib_file_new(url.path) else { return false }
-        defer { taglib_file_free(f) }
+    private static func hasPicture(_ f: UnsafeMutablePointer<TagLib_File>) -> Bool {
         guard let keys = taglib_complex_property_keys(f) else { return false }
         defer { taglib_complex_property_free_keys(keys) }
         var i = 0
@@ -70,8 +70,10 @@ enum Tags {
     }
 
     static func embeddedArt(_ url: URL) -> Data? {
-        guard let f = taglib_file_new(url.path), let props = taglib_complex_property_get(f, "PICTURE") else { return nil }
-        defer { taglib_complex_property_free(props); taglib_file_free(f) }
+        guard let f = taglib_file_new(url.path) else { return nil }
+        defer { taglib_file_free(f) }
+        guard let props = taglib_complex_property_get(f, "PICTURE") else { return nil }
+        defer { taglib_complex_property_free(props) }
         var pic = TagLib_Complex_Property_Picture_Data()
         taglib_picture_from_complex_property(props, &pic)
         return pic.data.map { Data(bytes: $0, count: Int(pic.size)) }
