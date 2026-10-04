@@ -194,6 +194,17 @@ private func touch(_ url: URL) {
     #expect(Library.scanDiscs(root).isEmpty)
 }
 
+@Test func boxSetOfDistinctAlbumsUsesParentFolderName() throws {
+    let root = try tempDir()
+    for (path, album) in [("Box/Disc 1/a.flac", "Nausicaa"), ("Box/Disc 2/b.flac", "Ponyo"), ("Box/Disc 2/c.flac", "Ponyo")] {
+        let f = root.appendingPathComponent(path)
+        try makeAudio(f)
+        try Tags.write(f, ["ALBUM": [album]])
+    }
+    let changes = Library.scanDiscs(root)
+    #expect(Set(changes.filter { $0.kind == .tag("ALBUM") }.map(\.new)) == ["Box [Disc 1]", "Box [Disc 2]"])
+}
+
 @Test func embedContinuesPastUnreadableTrack() throws {
     let root = try tempDir()
     let broken = root.appendingPathComponent("a.flac"), good = root.appendingPathComponent("b.flac")

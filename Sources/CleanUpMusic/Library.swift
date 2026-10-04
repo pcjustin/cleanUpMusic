@@ -169,7 +169,8 @@ enum Library {
 
     /// Proposes DISCNUMBER, DISCTOTAL and ALBUM `X [Disc n]` (MinimServer's disc-heading form) for tracks under
     /// sibling folders named like CD1 / Disc 2 / 碟3 (tracks may sit in a subfolder such as CD1/FLAC).
-    /// All discs of a set share the most common ALBUM base and ALBUMARTIST, since MinimServer splits albums on either.
+    /// All discs of a set share the ALBUM base found on the most discs (the parent folder name when no base is on two
+    /// discs, e.g. a box set of different albums) and the most common ALBUMARTIST, since MinimServer splits albums on either.
     /// A lone disc folder is skipped: there is nothing to merge it with.
     static func scanDiscs(_ root: URL, progress: (Int) -> Void = { _ in }) -> [Change] {
         let (dirs, rootDepth) = audioDirs(root)
@@ -192,8 +193,11 @@ enum Library {
             let total = String(Set(items.map(\.n)).count)
             let group = relativePath(parent, rootDepth)
             let tracks = items.flatMap { item in item.tracks.map { (url: $0, n: item.n, tags: tagsOf[$0]!) } }
-            let bases = tracks.compactMap { $0.tags["ALBUM"]?.first.map(albumBase) }.filter { !$0.isEmpty }
-            let base = mostCommon(bases) ?? parent.lastPathComponent
+            let discBases = Dictionary(grouping: tracks, by: \.n).values.flatMap { disc in
+                Set(disc.compactMap { $0.tags["ALBUM"]?.first.map(albumBase) }.filter { !$0.isEmpty })
+            }
+            let base = Dictionary(grouping: discBases, by: { $0 }).filter { $0.value.count > 1 }
+                .max { ($0.value.count, $1.key) < ($1.value.count, $0.key) }?.key ?? parent.lastPathComponent
             let artist = mostCommon(tracks.compactMap { $0.tags["ALBUMARTIST"]?.first })
             for (t, n, tags) in tracks {
                 func propose(_ key: String, _ new: String) {
