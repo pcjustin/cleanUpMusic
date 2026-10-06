@@ -193,9 +193,13 @@ struct CoverPicker: View {
         searching = true
         let q = query
         searchTask = Task {
+            async let slow = CoverSearch.musicBrainz(q)
             let found = await CoverSearch.search(q)
             guard !Task.isCancelled else { return }
             results = found
+            let more = await slow
+            guard !Task.isCancelled else { return }
+            results += more.filter { c in !results.contains { $0.full == c.full } }
             searching = false
         }
     }
