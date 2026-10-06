@@ -15,6 +15,8 @@ struct Album: Identifiable {
     var cover: CoverState
     let title: String
     let artist: String
+    /// ALBUM without disc markers, or the first track's TITLE when that leaves nothing.
+    var searchName = ""
 }
 
 struct AlbumSplit: Identifiable {
@@ -119,11 +121,13 @@ enum Library {
             let groups = albumGroups(tags)
             for g in groups {
                 let t = tags[g.indices[0]]
+                let base = albumBase(t["ALBUM"]?.first ?? "")
                 albums.append(Album(
                     dir: d.dir, split: groups.count > 1, tracks: g.indices.map { d.tracks[$0] },
                     cover: coverState(images: images, embeddedArt: t["PICTURE"] != nil),
                     title: t["ALBUM"]?.first ?? d.dir.lastPathComponent,
-                    artist: (t["ALBUMARTIST"] ?? t["ARTIST"])?.first ?? ""))
+                    artist: (t["ALBUMARTIST"] ?? t["ARTIST"])?.first ?? "",
+                    searchName: base.isEmpty ? t["TITLE"]?.first ?? "" : base))
             }
         }
         return albums

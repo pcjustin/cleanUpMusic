@@ -129,6 +129,16 @@ private func touch(_ url: URL) {
     #expect(Set(Library.scanChinese(root).map(\.old)) == ["后来"])
 }
 
+@Test func coverSearchNameFallsBackToTitle() throws {
+    let root = try tempDir()
+    for (dir, tags) in [("a", ["TITLE": ["Song"]]), ("b", ["ALBUM": ["Album [Disc 1]"], "TITLE": ["Song"]])] {
+        let f = root.appendingPathComponent("\(dir)/01.flac")
+        try makeAudio(f)
+        try Tags.write(f, tags)
+    }
+    #expect(Library.scanCovers(root).map(\.searchName).sorted() == ["Album", "Song"])
+}
+
 @Test func singlesInOneFolderAreSeparateAlbums() throws {
     let root = try tempDir()
     for name in ["a", "b"] {

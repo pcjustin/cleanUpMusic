@@ -176,13 +176,8 @@ struct CoverPicker: View {
     }
 
     private var defaultQuery: String {
-        var folder = album.dir
-        while folder.lastPathComponent.range(of: #"^(cd|disc|disk|dvd|碟|光碟)\s*\d+$"#, options: [.regularExpression, .caseInsensitive]) != nil {
-            folder.deleteLastPathComponent()
-        }
-        let parent = folder.deletingLastPathComponent().lastPathComponent
         var parts: [String] = []
-        for p in [album.title, album.artist, folder.lastPathComponent, album.artist.isEmpty ? parent : ""] where !p.isEmpty {
+        for p in [album.searchName, album.artist] where !p.isEmpty {
             if !parts.contains(where: { $0.localizedCaseInsensitiveContains(p) }) { parts.append(p) }
         }
         return parts.joined(separator: " ")
