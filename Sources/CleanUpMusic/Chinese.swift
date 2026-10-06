@@ -15,8 +15,14 @@ enum Chinese {
     }
 
     /// Returns the Traditional form only when the input contains Simplified characters.
+    /// Text with kana is Japanese, whose kanji (恋, 写, 声…) would otherwise read as Simplified.
     static func convert(_ s: String) -> String? {
+        guard !hasKana(s) else { return nil }
         let t = toTraditional(s)
         return t == s ? nil : t
+    }
+
+    static func hasKana(_ s: String) -> Bool {
+        s.unicodeScalars.contains { (0x3041...0x3096).contains($0.value) || (0x30A1...0x30FA).contains($0.value) }
     }
 }

@@ -223,9 +223,14 @@ enum Library {
         var changes: [Change] = [], folderChanges: [Change] = []
         var seenFolders = Set<String>()
         var dirGroup: [String: String] = [:]
+        // ponytail: an album of kanji-only names (no kana in any tag, file or folder) still reads as Simplified.
+        var japanese = Set<String>()
         for (d, tags) in zip(dirs, allTags) {
             let group = albumGroup(tags[0]) ?? relativePath(d.dir, rootDepth)
             dirGroup[d.dir.path] = group
+            let texts = [relativePath(d.dir, rootDepth)] + d.tracks.map(\.lastPathComponent) + tags.flatMap { $0.values.joined() }
+            // A lone の is borrowed by Chinese titles for 的.
+            if texts.contains(where: { Chinese.hasKana($0.replacingOccurrences(of: "の", with: "")) }) { japanese.insert(group) }
 
             for (t, tag) in zip(d.tracks, tags) {
                 for key in tagKeys {
@@ -253,8 +258,9 @@ enum Library {
             let p = folderChanges[i].url.path
             let groups = Set(dirGroup.filter { $0.key == p || $0.key.hasPrefix(p + "/") }.values)
             folderChanges[i].group = groups.count == 1 ? groups.first! : "資料夾：" + relativePath(folderChanges[i].url, rootDepth)
+            if groups.isSubset(of: japanese) { japanese.insert(folderChanges[i].group) }
         }
-        return changes + folderChanges
+        return (changes + folderChanges).filter { !japanese.contains($0.group) }
     }
 
     /// Path below the scanned root; the root's own name for the root itself.

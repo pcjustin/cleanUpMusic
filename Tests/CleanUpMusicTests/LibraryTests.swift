@@ -31,6 +31,9 @@ private func touch(_ url: URL) {
 @Test func simplifiedToTraditional() {
     #expect(Chinese.toTraditional("头发") == "頭髮")
     #expect(Chinese.convert("發展") == nil)
+    #expect(Chinese.toTraditional("恋の歌") != "恋の歌")
+    #expect(Chinese.convert("恋の歌") == nil)
+    #expect(Chinese.convert("迈克尔・杰克逊") == "邁克爾・傑克遜")
 }
 
 @Test func tagRoundTrip() throws {
@@ -110,6 +113,20 @@ private func touch(_ url: URL) {
     #expect(group("冷门") == "刘若英/冷门")
     #expect(group("刘若英") == "資料夾：刘若英")
     #expect(Set(changes.filter { $0.kind == .tag("ALBUM") }.map(\.group)) == ["後來 – 劉若英", "刘若英/冷门"])
+}
+
+@Test func skipsJapaneseAlbums() throws {
+    let root = try tempDir()
+    for (album, title) in [("写真", "あなた"), ("初恋", "初恋")] {
+        let f = root.appendingPathComponent("中岛美雪/\(album)/\(title).flac")
+        try makeAudio(f)
+        try Tags.write(f, ["ALBUM": [album], "TITLE": [title], "ARTIST": ["中島みゆき"]])
+    }
+    let zh = root.appendingPathComponent("后来/后来の歌.flac")
+    try makeAudio(zh)
+    try Tags.write(zh, ["ALBUM": ["后来"], "TITLE": ["后来の歌"]])
+
+    #expect(Set(Library.scanChinese(root).map(\.old)) == ["后来"])
 }
 
 @Test func singlesInOneFolderAreSeparateAlbums() throws {
