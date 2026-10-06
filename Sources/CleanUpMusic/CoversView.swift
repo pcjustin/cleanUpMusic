@@ -63,6 +63,7 @@ struct CoverPicker: View {
     @State private var urlText = ""
     @State private var parentImages: [URL] = []
     @State private var current: [(name: String, image: NSImage)] = []
+    @State private var folderCovers: [URL] = []
     @AppStorage("coverToFile") private var toFile = true
     @AppStorage("coverToEmbed") private var toEmbed = false
 
@@ -84,6 +85,18 @@ struct CoverPicker: View {
                 }
             }
             if album.split { Text("此資料夾含多個專輯（單曲），只能嵌入 metadata").foregroundStyle(.secondary) }
+            if album.split, !folderCovers.isEmpty {
+                HStack {
+                    Text("資料夾裡的 \(folderCovers.map(\.lastPathComponent).joined(separator: "、")) 會顯示在這裡所有的單曲上")
+                        .foregroundStyle(.orange)
+                    Button("刪除") {
+                        let files = folderCovers
+                        m.fixCover(album, covered: false) {
+                            for u in files { try FileManager.default.removeItem(at: u); Library.log("delete", u.path, "") }
+                        }
+                    }
+                }
+            }
             if !album.split, case .unreadable(let imgs) = album.cover {
                 imageRow("資料夾裡現有的圖（檔名 MinimServer 讀不到）", imgs, button: "設為封面") { try Library.promote($0) }
             }
@@ -134,14 +147,15 @@ struct CoverPicker: View {
         }
         .task(id: m.coverRevision) {
             let a = album
-            current = await Task.detached {
+            (folderCovers, current) = await Task.detached {
                 var out: [(name: String, image: NSImage)] = []
-                let files = (try? FileManager.default.contentsOfDirectory(at: a.dir, includingPropertiesForKeys: nil)) ?? []
-                for u in files.filter(Library.isMinimCover).sorted(by: { $0.path < $1.path }) {
+                let files = ((try? FileManager.default.contentsOfDirectory(at: a.dir, includingPropertiesForKeys: nil)) ?? [])
+                    .filter(Library.isMinimCover).sorted { $0.path < $1.path }
+                for u in files {
                     if let i = NSImage(contentsOf: u) { out.append((u.lastPathComponent, i)) }
                 }
                 if let d = Tags.embeddedArt(a.tracks[0]), let i = NSImage(data: d) { out.append(("內嵌", i)) }
-                return out
+                return (files, out)
             }.value
         }
         .task {

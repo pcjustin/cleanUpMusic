@@ -118,14 +118,17 @@ enum Library {
         for (d, tags) in zip(dirs, readTags(dirs, progress: progress)) {
             let images = d.files.filter { imageExts.contains($0.pathExtension.lowercased()) }.map(fixJpeg)
             // ponytail: reads every track's tags to detect singles; sample a few tracks if NAS scans get slow.
-            let groups = albumGroups(tags)
+            // Tracks without ALBUM are loose songs, each its own album when the folder holds more than one.
+            let groups = albumGroups(tags).flatMap { g in g.album.isEmpty ? g.indices.map { (album: "", indices: [$0]) } : [g] }
+            let split = groups.count > 1
             for g in groups {
                 let t = tags[g.indices[0]]
                 let base = albumBase(t["ALBUM"]?.first ?? "")
                 albums.append(Album(
-                    dir: d.dir, split: groups.count > 1, tracks: g.indices.map { d.tracks[$0] },
-                    cover: coverState(images: images, embeddedArt: t["PICTURE"] != nil),
-                    title: t["ALBUM"]?.first ?? d.dir.lastPathComponent,
+                    dir: d.dir, split: split, tracks: g.indices.map { d.tracks[$0] },
+                    // A folder image would show on every album of a split folder, so only embedded art counts there.
+                    cover: coverState(images: split ? [] : images, embeddedArt: t["PICTURE"] != nil),
+                    title: t["ALBUM"]?.first ?? (split ? t["TITLE"]?.first : nil) ?? d.dir.lastPathComponent,
                     artist: (t["ALBUMARTIST"] ?? t["ARTIST"])?.first ?? "",
                     searchName: base.isEmpty ? t["TITLE"]?.first ?? "" : base))
             }

@@ -152,6 +152,20 @@ private func touch(_ url: URL) {
     #expect(Set(albums.map(\.id)).count == 2)
 }
 
+@Test func songsWithoutAlbumAreSeparateAlbums() throws {
+    let root = try tempDir()
+    for name in ["a", "b"] {
+        let f = root.appendingPathComponent("\(name).flac")
+        try makeAudio(f)
+        try Tags.write(f, ["TITLE": [name]])
+    }
+    touch(root.appendingPathComponent("cover.jpg"))
+    let albums = Library.scanCovers(root)
+    #expect(albums.allSatisfy { $0.split && $0.tracks.count == 1 && $0.cover == .missing })
+    #expect(albums.map(\.title).sorted() == ["a", "b"])
+    #expect(albums.map(\.searchName).sorted() == ["a", "b"])
+}
+
 @Test func albumSplits() throws {
     let root = try tempDir()
     let near = root.appendingPathComponent("near")

@@ -80,13 +80,13 @@ final class Model: ObservableObject {
     }
 
     /// Runs a cover fix for one album off the main thread (it writes to the NAS) and marks it covered on success.
-    func fixCover(_ album: Album, _ op: @escaping @Sendable () async throws -> Void) {
+    func fixCover(_ album: Album, covered: Bool = true, _ op: @escaping @Sendable () async throws -> Void) {
         guard !scanning else { return }
         scanning = true
         Task {
             do {
                 try await Task.detached(operation: op).value
-                if let i = albums.firstIndex(where: { $0.id == album.id }) { albums[i].cover = .ok }
+                if covered, let i = albums.firstIndex(where: { $0.id == album.id }) { albums[i].cover = .ok }
             } catch {
                 message = error.localizedDescription
             }
