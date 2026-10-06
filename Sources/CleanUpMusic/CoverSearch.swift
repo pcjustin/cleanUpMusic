@@ -10,9 +10,12 @@ struct CoverCandidate: Identifiable, Hashable {
 
 enum CoverSearch {
     static func search(_ query: String) async -> [CoverCandidate] {
-        async let a = itunes(query)
-        async let b = deezer(query)
-        return await a + b
+        // HK matched TW in tests and CN returns nothing; JP finds Japanese albums missing from TW.
+        async let tw = itunes(query, country: "tw")
+        async let jp = itunes(query, country: "jp")
+        async let dz = deezer(query)
+        var seen = Set<URL>()
+        return await (tw + jp + dz).filter { seen.insert($0.full).inserted }
     }
 
     private struct ITunes: Decodable {
@@ -26,10 +29,10 @@ enum CoverSearch {
         let data: [R]
     }
 
-    private static func itunes(_ q: String) async -> [CoverCandidate] {
+    private static func itunes(_ q: String, country: String) async -> [CoverCandidate] {
         var c = URLComponents(string: "https://itunes.apple.com/search")!
         c.queryItems = [.init(name: "term", value: q), .init(name: "entity", value: "album"),
-                        .init(name: "country", value: "tw"), .init(name: "limit", value: "20")]
+                        .init(name: "country", value: country), .init(name: "limit", value: "20")]
         guard let r: ITunes = await fetch(c.url!) else { return [] }
         return r.results.compactMap { x in
             guard let s = x.artworkUrl100, let thumb = URL(string: s.replacingOccurrences(of: "100x100bb", with: "300x300bb")),
