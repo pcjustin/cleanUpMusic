@@ -33,10 +33,13 @@ Every rename, tag write, saved cover and removed cover file is appended to `~/Li
 ## macOS
 
 ```sh
-brew install taglib opencc pkgconf
+brew install taglib opencc pkgconf dylibbundler
 swift run
 swift test
+./build-dmg.sh
 ```
+
+`./build-dmg.sh` produces `dist/CleanUpMusic.dmg`, an app with TagLib, OpenCC and its dictionaries inside, so other Macs need no Homebrew. It needs the same macOS version as the build machine or newer (Homebrew's libraries are built for it). It is ad-hoc signed, not notarized: on another Mac, right-click → Open the first time, or run `xattr -cr /Applications/CleanUpMusic.app`.
 
 ## Windows
 

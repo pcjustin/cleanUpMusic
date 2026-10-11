@@ -7,6 +7,7 @@ struct CleanUpMusicApp: App {
     @State private var model = AppController { f in DispatchQueue.main.async(execute: f) }
 
     init() {
+        Chinese.dataDir = Bundle.main.url(forResource: "opencc", withExtension: nil) // set by build-dmg.sh
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.applicationIconImage = Bundle.module.url(forResource: "AppIcon", withExtension: "svg").flatMap(NSImage.init(contentsOf:))
         DispatchQueue.main.async { NSApplication.shared.activate(ignoringOtherApps: true) }
