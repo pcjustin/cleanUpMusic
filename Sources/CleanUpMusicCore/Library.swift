@@ -1,40 +1,47 @@
 import Foundation
+#if os(Windows)
+import WinSDK
+#endif
 
-enum CoverState: Equatable {
+public enum CoverState: Equatable, Sendable {
     case ok, missing
     case unreadable([URL])
 }
 
-struct Album: Identifiable {
-    let dir: URL
+public struct Album: Identifiable, Sendable {
+    public let dir: URL
     /// True when the folder holds tracks of several ALBUMs (e.g. singles); a folder-level cover file would show on
     /// all of them, so covers can only be embedded.
-    var split = false
-    var id: URL { split ? tracks[0] : dir }
-    let tracks: [URL]
-    var cover: CoverState
-    let title: String
-    let artist: String
+    public var split = false
+    public var id: URL { split ? tracks[0] : dir }
+    public let tracks: [URL]
+    public var cover: CoverState
+    public let title: String
+    public let artist: String
     /// ALBUM without disc markers, or the first track's TITLE when that leaves nothing.
-    var searchName = ""
-}
+    public var searchName = ""
 
-struct AlbumSplit: Identifiable {
-    struct Variant {
-        let album: String
-        let tracks: [URL]
+    public init(dir: URL, split: Bool = false, tracks: [URL], cover: CoverState, title: String, artist: String, searchName: String = "") {
+        (self.dir, self.split, self.tracks, self.cover, self.title, self.artist, self.searchName) = (dir, split, tracks, cover, title, artist, searchName)
     }
-    let dir: URL
-    let variants: [Variant]
-    /// Values differ only by case, spacing, width or Simplified/Traditional: almost certainly one album.
-    let similar: Bool
-    var id: URL { dir }
 }
 
-enum ChangeKind: Hashable {
+public struct AlbumSplit: Identifiable, Sendable {
+    public struct Variant: Sendable {
+        public let album: String
+        public let tracks: [URL]
+    }
+    public let dir: URL
+    public let variants: [Variant]
+    /// Values differ only by case, spacing, width or Simplified/Traditional: almost certainly one album.
+    public let similar: Bool
+    public var id: URL { dir }
+}
+
+public enum ChangeKind: Hashable, Sendable {
     case tag(String), file, folder
 
-    var label: String {
+    public var label: String {
         switch self {
         case .tag(let k): k
         case .file: "檔名"
@@ -43,26 +50,32 @@ enum ChangeKind: Hashable {
     }
 }
 
-struct Change: Identifiable {
-    let id = UUID()
-    let kind: ChangeKind
-    let url: URL
-    let old: String
-    let new: String
+public struct Change: Identifiable, Sendable {
+    public let id = Foundation.UUID() // WinSDK has a UUID too
+    public let kind: ChangeKind
+    public let url: URL
+    public let old: String
+    public let new: String
     /// Values a tag change writes; `new` is their display form.
-    let values: [String]
-    var group = ""
-    var selected = false
+    public let values: [String]
+    public var group = ""
+    /// Extra detail for the list, e.g. the code page a garbled name is repaired from.
+    public var note = ""
 }
 
-enum Library {
+public enum Library {
     static let tagKeys = ["TITLE", "ARTIST", "ALBUM", "ALBUMARTIST", "DISCNUMBER", "DISCTOTAL"]
     static let audioExts: Set = ["flac", "mp3", "m4a", "wav", "aif", "aiff", "ape"]
-    static let imageExts: Set = ["jpg", "jpeg", "png", "webp"]
+    public static let imageExts: Set = ["jpg", "jpeg", "png", "webp"]
     static let coverNames: Set = ["folder", "cover"]
     /// Tests point this at a temp file.
-    static var logURL = FileManager.default.homeDirectoryForCurrentUser
+    #if os(Windows)
+    public static var logURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["LOCALAPPDATA"] ?? NSTemporaryDirectory())
+        .appendingPathComponent("CleanUpMusic/changes.log")
+    #else
+    public static var logURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Logs/CleanUpMusic/changes.log")
+    #endif
 
     private struct AudioDir {
         let dir: URL
@@ -70,27 +83,40 @@ enum Library {
         let files: [URL]
     }
 
-    /// Folders that directly contain audio, plus the root depth; paths are symlink-resolved. Folders are listed 32 at
-    /// a time, each queued as soon as its parent is listed (a cold NAS walk takes ~27% less; the NAS answers listings
-    /// mostly one by one), prefetching the size and modification date `Tags.readAll` checks against its cache.
-    /// Serial queues, unlike GCD's shared pool, always get a thread, even when the caller blocks a Swift task.
+    /// Folders that directly contain audio, plus the root depth.
     private static func audioDirs(_ root: URL) -> (dirs: [AudioDir], rootDepth: Int) {
+        let (folders, rootDepth) = listTree(root)
+        let dirs = folders.compactMap { f in
+            let tracks = f.files.filter { audioExts.contains($0.pathExtension.lowercased()) }.sorted { $0.path < $1.path }
+            return tracks.isEmpty ? nil : AudioDir(dir: f.dir, tracks: tracks, files: f.files)
+        }
+        return (dirs, rootDepth)
+    }
+
+    /// Every folder under the root (the root included) with its files, plus the root depth; paths are
+    /// symlink-resolved. Folders are listed 32 at a time, each queued as soon as its parent is listed (a cold NAS
+    /// walk takes ~27% less; the NAS answers listings mostly one by one), prefetching the size and modification date
+    /// `Tags.readAll` checks against its cache. Serial queues, unlike GCD's shared pool, always get a thread, even
+    /// when the caller blocks a Swift task.
+    private static func listTree(_ root: URL) -> (folders: [(dir: URL, files: [URL])], rootDepth: Int) {
+        #if os(Windows)
+        let realRoot = root // resolvingSymlinksInPath turns \\server\share into \server\share
+        #else
         let realRoot = URL(fileURLWithPath: realpath(root.path, nil).map { p in defer { free(p) }; return String(cString: p) } ?? root.path)
+        #endif
         let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
         let queues = (0..<32).map { _ in DispatchQueue(label: "nas") }
-        let turn = Locked(0), found = Locked<[AudioDir]>([]), listed = DispatchGroup()
+        let turn = Locked(0), found = Locked<[(dir: URL, files: [URL])]>([]), listed = DispatchGroup()
         func list(_ dir: URL) {
-            let items = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys, options: .skipsHiddenFiles)) ?? []
             var files: [URL] = []
-            for u in items where !u.lastPathComponent.hasPrefix(".") {
-                if (try? u.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+            for (u, isDirectory) in entries(of: dir, prefetching: keys) {
+                if isDirectory {
                     queues[turn { $0 += 1; return $0 % 32 }].async(group: listed) { list(u) }
                 } else {
                     files.append(u)
                 }
             }
-            let tracks = files.filter { audioExts.contains($0.pathExtension.lowercased()) }.sorted { $0.path < $1.path }
-            if !tracks.isEmpty { found { $0.append(AudioDir(dir: URL(fileURLWithPath: dir.path, isDirectory: true), tracks: tracks, files: files)) } }
+            found { $0.append((URL(fileURLWithPath: dir.path, isDirectory: true), files)) }
         }
         queues[0].async(group: listed) { list(realRoot) }
         listed.wait()
@@ -112,7 +138,7 @@ enum Library {
     }
 
     /// All albums with their cover state. Renames `cover.jpeg` / `folder.jpeg` on the way.
-    static func scanCovers(_ root: URL, progress: (Int) -> Void = { _ in }) -> [Album] {
+    public static func scanCovers(_ root: URL, progress: (Int) -> Void = { _ in }) -> [Album] {
         var albums: [Album] = []
         let dirs = audioDirs(root).dirs
         for (d, tags) in zip(dirs, readTags(dirs, progress: progress)) {
@@ -137,7 +163,7 @@ enum Library {
     }
 
     /// Folders whose tracks carry different ALBUM tags, which MinimServer shows as separate albums.
-    static func scanSplits(_ root: URL, progress: (Int) -> Void = { _ in }) -> [AlbumSplit] {
+    public static func scanSplits(_ root: URL, progress: (Int) -> Void = { _ in }) -> [AlbumSplit] {
         var splits: [AlbumSplit] = []
         let dirs = audioDirs(root).dirs
         for (d, tags) in zip(dirs, readTags(dirs, progress: progress)) {
@@ -179,7 +205,7 @@ enum Library {
     /// All discs of a set share the ALBUM base found on the most discs (the parent folder name when no base is on two
     /// discs, e.g. a box set of different albums) and the most common ALBUMARTIST, since MinimServer splits albums on either.
     /// A lone disc folder is skipped: there is nothing to merge it with.
-    static func scanDiscs(_ root: URL, progress: (Int) -> Void = { _ in }) -> [Change] {
+    public static func scanDiscs(_ root: URL, progress: (Int) -> Void = { _ in }) -> [Change] {
         let (dirs, rootDepth) = audioDirs(root)
         var sets: [URL: [(tracks: [URL], n: Int)]] = [:]
         for d in dirs {
@@ -224,7 +250,7 @@ enum Library {
         Dictionary(grouping: values, by: { $0 }).max { ($0.value.count, $1.key) < ($1.value.count, $0.key) }?.key
     }
 
-    static func scanChinese(_ root: URL, progress: (Int) -> Void = { _ in }) -> [Change] {
+    public static func scanChinese(_ root: URL, progress: (Int) -> Void = { _ in }) -> [Change] {
         let (dirs, rootDepth) = audioDirs(root)
         let allTags = readTags(dirs, progress: progress)
         var changes: [Change] = [], folderChanges: [Change] = []
@@ -270,6 +296,78 @@ enum Library {
         return (changes + folderChanges).filter { !japanese.contains($0.group) }
     }
 
+    /// File and folder names garbled by being read in the wrong code page (see `Mojibake`), with their repaired
+    /// names. A track's TITLE settles which reading is meant when a name could be read more than one way.
+    public static func scanMojibake(_ root: URL, progress: (Int) -> Void = { _ in }) -> [Change] {
+        let (folders, rootDepth) = listTree(root)
+        let suspects = folders.flatMap(\.files).filter { Mojibake.mightBeGarbled($0.lastPathComponent) }
+        let tracks = suspects.filter { audioExts.contains($0.pathExtension.lowercased()) }
+        let titles = Dictionary(uniqueKeysWithValues: zip(tracks, Tags.readAll(tracks, progress: progress).map { $0["TITLE"]?.first }))
+        var changes: [Change] = []
+        for f in suspects {
+            // A TITLE can be garbled the same way ("¤T¤é¤ë" for 三日月): repaired, it still helps; past repair, it can't.
+            let name = f.lastPathComponent, tag = titles[f] ?? nil
+            let title = tag.flatMap { Mojibake.repair($0)?.name ?? (Mojibake.mightBeGarbled($0) ? nil : $0) }
+            let fixed: (name: String, note: String)
+            if let r = Mojibake.repair(name, hint: title) {
+                fixed = (r.name, r.encoding)
+            } else if Mojibake.isLossy(name), let title, !title.isEmpty {
+                fixed = (Mojibake.fromTitle(name, title: title), "依 TITLE 標籤")
+            } else {
+                continue
+            }
+            guard fixed.name != name else { continue }
+            changes.append(Change(kind: .file, url: f, old: name, new: fixed.name, values: [],
+                                  group: relativePath(f.deletingLastPathComponent(), rootDepth), note: fixed.note))
+        }
+        for d in folders.map(\.dir) where d.pathComponents.count > rootDepth {
+            guard let r = Mojibake.repair(d.lastPathComponent) else { continue }
+            changes.append(Change(kind: .folder, url: d, old: d.lastPathComponent, new: r.name, values: [],
+                                  group: relativePath(d, rootDepth), note: r.encoding))
+        }
+        return changes
+    }
+
+    /// A folder's entries, hidden (dot) ones left out.
+    static func contents(of dir: URL) -> [URL] { entries(of: dir).map(\.url) }
+
+    /// A folder's entries and whether each is a folder, hidden (dot) ones left out. On Windows this asks the system
+    /// directly: Foundation lists nothing for a folder on a network share (\\server\share) when asked by URL, and
+    /// checking each entry for being a folder costs a NAS round trip that a listing already answers.
+    static func entries(of dir: URL, prefetching keys: [URLResourceKey]? = nil) -> [(url: URL, isDirectory: Bool)] {
+        #if os(Windows)
+        let pattern = dir.withUnsafeFileSystemRepresentation { String(cString: $0!) } + "\\*"
+        var data = WIN32_FIND_DATAW()
+        let find = pattern.withCString(encodedAs: UTF16.self) {
+            FindFirstFileExW($0, FindExInfoBasic, &data, FindExSearchNameMatch, nil, DWORD(FIND_FIRST_EX_LARGE_FETCH))
+        }
+        guard let find, find != INVALID_HANDLE_VALUE else { return [] }
+        defer { FindClose(find) }
+        var out: [(url: URL, isDirectory: Bool)] = []
+        repeat {
+            let name = withUnsafeBytes(of: data.cFileName) { raw in
+                String(decoding: raw.bindMemory(to: UInt16.self).prefix { $0 != 0 }, as: UTF16.self)
+            }
+            guard !name.hasPrefix(".") else { continue }
+            let isDirectory = data.dwFileAttributes & DWORD(FILE_ATTRIBUTE_DIRECTORY) != 0
+            let url = dir.appendingPathComponent(name, isDirectory: isDirectory)
+            out.append((url, isDirectory))
+            if !isDirectory {
+                // FILETIME counts 100 ns ticks from 1601.
+                let ticks = UInt64(data.ftLastWriteTime.dwHighDateTime) << 32 | UInt64(data.ftLastWriteTime.dwLowDateTime)
+                let date = Date(timeIntervalSince1970: Double(ticks) / 10_000_000 - 11_644_473_600)
+                let size = Int(UInt64(data.nFileSizeHigh) << 32 | UInt64(data.nFileSizeLow))
+                Tags.listed { $0[url.path] = (size, date) }
+            }
+        } while FindNextFileW(find, &data)
+        return out
+        #else
+        let items = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys, options: .skipsHiddenFiles)) ?? []
+        return items.filter { !$0.lastPathComponent.hasPrefix(".") }
+            .map { ($0, (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true) }
+        #endif
+    }
+
     /// Path below the scanned root; the root's own name for the root itself.
     private static func relativePath(_ u: URL, _ rootDepth: Int) -> String {
         let path = u.pathComponents.dropFirst(rootDepth).joined(separator: "/")
@@ -289,7 +387,7 @@ enum Library {
         return images.isEmpty ? .missing : .unreadable(images.sorted { $0.path < $1.path })
     }
 
-    static func isMinimCover(_ u: URL) -> Bool {
+    public static func isMinimCover(_ u: URL) -> Bool {
         coverNames.contains(u.deletingPathExtension().lastPathComponent.lowercased())
             && ["jpg", "png", "webp"].contains(u.pathExtension.lowercased())
     }
@@ -303,14 +401,14 @@ enum Library {
     }
 
     /// Renames a non-MinimServer image (e.g. `front.jpg`) to `cover.<ext>`.
-    static func promote(_ image: URL) throws {
+    public static func promote(_ image: URL) throws {
         let ext = image.pathExtension.lowercased() == "jpeg" ? "jpg" : image.pathExtension.lowercased()
         try rename(image, to: image.deletingLastPathComponent().appendingPathComponent("cover." + ext))
     }
 
     /// Writes `cover.<ext>`, then removes every other `folder.*` / `cover.*` image (MinimServer would pick `folder.*`
     /// first), and/or embeds the image in every track.
-    static func saveCover(_ data: Data, for album: Album, file: Bool, embed: Bool) throws {
+    public static func saveCover(_ data: Data, for album: Album, file: Bool, embed: Bool) throws {
         guard (file && !album.split) || embed else { throw failure("請勾選「存成 cover 檔」或「嵌入 metadata」") }
         guard let ext = imageExt(data) else { throw failure("不是 JPEG、PNG 或 WebP 圖片") }
         if file && !album.split {
@@ -355,7 +453,7 @@ enum Library {
     /// so every change's URL is still valid when its turn comes. Returns failure messages.
     /// A tag no longer holding its scanned value is skipped, so a stale list (e.g. CD numbers scanned
     /// before a Simplified→Traditional apply) can't undo a newer edit.
-    static func apply(_ changes: [Change]) -> [String] {
+    public static func apply(_ changes: [Change]) -> [String] {
         var failures: [String] = []
         let tagFiles = Dictionary(grouping: changes.filter { if case .tag = $0.kind { true } else { false } }, by: \.url)
         for (url, items) in tagFiles {
@@ -408,12 +506,12 @@ enum Library {
         return to
     }
 
-    static func describe(_ error: Error) -> String {
+    public static func describe(_ error: Error) -> String {
         let underlying = (error as NSError).userInfo[NSUnderlyingErrorKey] as? NSError
         return error.localizedDescription + (underlying.map { "（\($0.localizedDescription)）" } ?? "")
     }
 
-    static func log(_ fields: String...) {
+    public static func log(_ fields: String...) {
         let line = ([ISO8601DateFormatter().string(from: Date())] + fields).joined(separator: "\t") + "\n"
         let fm = FileManager.default
         try? fm.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)

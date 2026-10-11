@@ -1,10 +1,11 @@
 import Foundation
 import Testing
-@testable import CleanUpMusic
+@testable import CleanUpMusicCore
 
 /// Keeps test runs out of the real change log; every test touching files calls `tempDir()` first.
 private let testLog: Void = {
     Library.logURL = FileManager.default.temporaryDirectory.appendingPathComponent("CleanUpMusicTests.log")
+    Tags.cacheURL = nil
 }()
 
 private func tempDir() throws -> URL {
@@ -14,14 +15,19 @@ private func tempDir() throws -> URL {
     return d
 }
 
+/// One second of silence: a FLAC with only STREAMINFO, or 38 silent MPEG-1 Layer III frames (128 kbps, 44.1 kHz,
+/// mono); enough for TagLib to read and write tags, without needing an encoder.
 private func makeAudio(_ url: URL) throws {
     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/ffmpeg")
-    p.arguments = ["-loglevel", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "1", url.path]
-    try p.run()
-    p.waitUntilExit()
-    #expect(p.terminationStatus == 0)
+    var data: [UInt8]
+    if url.pathExtension == "mp3" {
+        data = (0..<38).flatMap { _ in [0xFF, 0xFB, 0x90, 0xC0] + [UInt8](repeating: 0, count: 413) }
+    } else {
+        let info: UInt64 = 44100 << 44 | 15 << 36 | 44100 // sample rate, 16 bits - 1, total samples
+        data = Array("fLaC".utf8) + [0x80, 0, 0, 34] + [0x10, 0x00, 0x10, 0x00, 0, 0, 0, 0, 0, 0]
+            + (0..<8).reversed().map { UInt8(info >> ($0 * 8) & 0xFF) } + [UInt8](repeating: 0, count: 16)
+    }
+    try Data(data).write(to: url)
 }
 
 private func touch(_ url: URL) {
@@ -80,9 +86,7 @@ private func touch(_ url: URL) {
 
     #expect(Set(changes.map(\.new)) == ["後來", "後來.flac", "劉若英"])
 
-    var all = changes
-    for i in all.indices { all[i].selected = true }
-    #expect(Library.apply(all).isEmpty)
+    #expect(Library.apply(changes).isEmpty)
     let renamed = root.appendingPathComponent("劉若英/後來/後來.flac")
     #expect(Tags.read(renamed)["TITLE"] == ["後來"])
     #expect(Library.scanChinese(root).isEmpty)
@@ -370,4 +374,92 @@ private func vorbisComment(_ entries: [[UInt8]]) -> [UInt8] {
     try fm.setAttributes([.modificationDate: old], ofItemAtPath: f.path)
     #expect(try fm.attributesOfItem(atPath: f.path)[.size] as? Int == size)
     #expect(scan() == ["B"])
+}
+
+@Test func repairsNamesReadInTheWrongCodepage() {
+    let cases: [(String, String, String)] = [
+        ("ƒ}ƒˆƒCƒK.flac", "マヨイガ.flac", "Shift-JIS"),
+        ("ºóÀ´µÄÎÒÃÇ.flac", "后来的我们.flac", "GBK"),
+        ("«á¨Óªº§Ú\u{AD}Ì.flac", "後來的我們.flac", "Big5"),
+        ("┴⌡╚⌠╙ó ║≤└┤.flac", "刘若英 后来.flac", "GBK"),
+        ("⌐P¬N¡█ ¡S»SªΦ.flac", "周杰倫 范特西.flac", "Big5"),
+        ("CafÃ© å¾Œä¾†.flac", "Café 後來.flac", "UTF-8"),
+        ("Æåôçé▌éΣé½ Ä₧æπ.flac", "中島みゆき 時代.flac", "Shift-JIS"),
+        // From a real library: Big5 brackets, and Japanese saved on a Korean PC then read as Shift-JIS.
+        ("025-SAN-KEN¡uThe Three SAGES¡v.flac", "025-SAN-KEN「The Three SAGES」.flac", "Big5"),
+        ("06 - A Thousand Dreams of You (from \u{AD}·¤ë).flac", "06 - A Thousand Dreams of You (from 風月).flac", "Big5"),
+        ("02 ｫｵｫｯｫ鬮筬ﾁ.mp3", "02 サクラモチ.mp3", "Korean (CP949)"),
+    ]
+    for (garbled, name, encoding) in cases {
+        #expect(Mojibake.repair(garbled) == Mojibake.Repair(name: name, encoding: encoding), "\(garbled)")
+    }
+}
+
+@Test func leavesRealNamesAlone() {
+    // From a real library: accents, Greek, Cyrillic, symbols and half-width katakana that are meant to be there.
+    for name in ["01. Décolleté.flac", "01 - A Song for ××.flac", "01. träumerei.flac", "01 Weiβ ～幻想への誘い～.flac",
+                 "01. Колечко.flac", "06 もしも････.flac", "PLASMIC FIRE KOTOKO×ALTIMA", "Raison d'être 交差する宿命.flac",
+                 "01-Open α Door.flac", "04 安藤裕子 - 360°サラウンド.flac", "後來.flac", "plain.flac",
+                 "[2012.02.22] LOVER“S”MiL", "[2010.04.14] Rock’n’Roll Circus", "Don’t Stop — Live…",
+                 "1.04. Pièces de clavessin avec une méthode pour la méchanique des doigts No. 4, Deuxième gigue en rondeau.flac",
+                 "01. Gil Shaham, Göran Söllscher - Paganini Sonata Concertata In A Major.flac", "Kevin Penkin - Sëgûr.flac",
+                 "04. Allegro Di Molto_ »Alles, Was Odem Hat, Lobe Den Herrn«__.flac", "Lumière - Nuit sur Lumière.flac",
+                 "Meirav Ben David-Harel, Yaïr Harel, Nima Ben David, Michèle Claude - Yedid Nefesh",
+                 "Carmen (Frasquita, Mercédès, Micaëla).flac"] {
+        #expect(Mojibake.repair(name) == nil, "\(name)")
+    }
+    // Bytes lost on the way (・ where Shift-JIS had no character) leave nothing to read back.
+    #expect(Mojibake.repair("03 ｪｪ・・ｪﾇﾘﾇ.mp3") == nil)
+    #expect(Mojibake.isLossy("03 ｪｪ・・ｪﾇﾘﾇ.mp3"))
+    #expect(Mojibake.fromTitle("03 ｪｪ・・ｪﾇﾘﾇ.mp3", title: "お花畑で週末") == "03 お花畑で週末.mp3")
+    #expect(Mojibake.fromTitle("09. ﾒｻｷｬ､ﾎｱｦﾎ・(Yui ver.).flac", title: "一番の宝物 (Yui ver.)") == "09. 一番の宝物 (Yui ver.).flac")
+    #expect(Mojibake.fromTitle("1-02 ｱｲ・.flac", title: "A/B: C?") == "1-02 A_B_ C_.flac")
+    // A plain-ASCII TITLE is in every reading of the name, so it confirms nothing.
+    #expect(Mojibake.repair("01. Göran Söllscher - Sonata Concertata.flac", hint: "Sonata Concertata") == nil)
+}
+
+@Test func scansAndRepairsGarbledNames() throws {
+    let root = try tempDir()
+    let album = root.appendingPathComponent("ºóÀ´") // 后来, GBK read as cp1252
+    let track = album.appendingPathComponent("01. ƒ}ƒˆƒCƒK.flac") // マヨイガ, Shift-JIS read as cp1252
+    try makeAudio(track)
+    try Tags.write(track, ["TITLE": ["マヨイガ"]])
+    touch(album.appendingPathComponent("┴⌡╚⌠╙ó.cue")) // 刘若英, GBK read as cp437 (a ZIP without the UTF-8 flag)
+    try makeAudio(root.appendingPathComponent("fine/後來.flac"))
+
+    let changes = Library.scanMojibake(root)
+    #expect(Set(changes.map(\.new)) == ["后来", "01. マヨイガ.flac", "刘若英.cue"])
+    #expect(changes.first { $0.kind == .folder }?.note == "GBK")
+    #expect(Library.apply(changes).isEmpty)
+    let fixed = root.appendingPathComponent("后来")
+    #expect(try FileManager.default.contentsOfDirectory(atPath: fixed.path).sorted() == ["01. マヨイガ.flac", "刘若英.cue"])
+    #expect(Library.scanMojibake(root).isEmpty)
+}
+
+@Test func garbledPastReadingIsRenamedFromItsTitle() throws {
+    let root = try tempDir()
+    let tracks = [("03 ｪｪ・・ｪﾇﾘﾇ.flac", "お花畑で週末"), ("05. ､T､鬢・.flac", "¤T¤é¤ë"), ("09. ﾒｻｷｬ､ﾎｱｦﾎ・.flac", "ﾒｻｷｬ､ﾎｱｦﾎ・")]
+    for (name, title) in tracks {
+        let f = root.appendingPathComponent(name)
+        try makeAudio(f)
+        try Tags.write(f, ["TITLE": [title]])
+    }
+    // The second TITLE is itself garbled (Big5 read as cp1252) and is repaired first; the third is past repair too.
+    #expect(Set(Library.scanMojibake(root).map(\.new)) == ["03 お花畑で週末.flac", "05. 三日月.flac"])
+}
+
+@Test func tagCacheSurvivesARestart() throws {
+    _ = testLog
+    let dir = try tempDir()
+    let f = dir.appendingPathComponent("t.flac")
+    try makeAudio(f)
+    try Tags.write(f, ["ALBUM": ["A"]])
+    let file = dir.appendingPathComponent("tags.json")
+    Tags.cacheURL = file
+    defer { Tags.cacheURL = nil }
+    #expect(Tags.readAll([f])[0]["ALBUM"] == ["A"])
+    // What a new run loads: the entry, with a date that still matches the file's exactly.
+    let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]
+    #expect(saved?[f.path] != nil)
+    #expect(try Tags.cachedTagsForTesting(file, f) == ["ALBUM": ["A"]])
 }

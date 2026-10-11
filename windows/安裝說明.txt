@@ -1,0 +1,50 @@
+﻿CleanUpMusic（Windows 版）安裝說明
+==================================
+
+系統需求
+--------
+- Windows 10 1809 以上，或 Windows 11（64 位元）
+- 安裝必要元件時需要系統管理員權限
+
+
+第一次使用
+----------
+1. 把整個 zip 解壓縮到任意資料夾，例如 C:\CleanUpMusic
+   （請先解壓縮，不要直接在 zip 裡執行）
+
+2. 雙擊「install-prerequisites.cmd」，安裝必要元件：
+   - .NET 10 Desktop Runtime
+   - Windows App Runtime 1.8
+   安裝檔已放在 prerequisites 資料夾，不需要網路。
+   過程中會跳出「使用者帳戶控制」視窗，請按「是」。
+   已經安裝過的元件會自動略過。
+   看到「Done. You can now run CleanUpMusic.exe.」後，按任意鍵關閉。
+
+3. 雙擊「CleanUpMusic.exe」開始使用。
+
+
+之後使用
+--------
+必要元件只要裝一次。之後直接執行 CleanUpMusic.exe 即可。
+更新版本時，解壓縮新的 zip 後直接執行；若程式提示缺少元件，再執行一次 install-prerequisites.cmd。
+
+
+使用提醒
+--------
+- 會修改檔名、資料夾名稱和音樂標籤。第一次使用請先拿一兩張專輯的「複本」測試，確認結果再用在 NAS 的音樂庫上。
+- 所有變更都會記錄在：
+  %LOCALAPPDATA%\CleanUpMusic\changes.log
+  （在檔案總管網址列貼上這個路徑即可開啟）
+- 也可以把音樂資料夾直接拖到 CleanUpMusic.exe 上開啟。
+
+
+常見問題
+--------
+Q：開啟時出現「Required components of the Windows App Runtime are missing」？
+A：必要元件沒裝好，請執行 install-prerequisites.cmd 後再開。
+
+Q：出現要求安裝 .NET 的視窗？
+A：同上，執行 install-prerequisites.cmd。
+
+Q：Windows 跳出「Windows 已保護您的電腦」（SmartScreen）？
+A：程式沒有數位簽章才會出現。按「其他資訊」→「仍要執行」。
