@@ -44,6 +44,6 @@ windows\build.cmd            # or double-click it; add -Test to also run the cor
 .\windows\build.ps1          # the same, from PowerShell (needs a script policy that allows it)
 ```
 
-It produces `windows\dist\CleanUpMusic-win-x64.zip`: unzip anywhere and run `CleanUpMusic.exe`; .NET, the Windows App SDK and the Swift runtime are inside, so the PC needs nothing installed. A folder passed on the command line (or dropped on the exe) opens as if picked.
+It produces `windows\dist\CleanUpMusic-win-x64.zip`. On another PC, unzip it, run `install-prerequisites.cmd` once (it installs the .NET 10 Desktop Runtime and Windows App Runtime 1.8 from the bundled installers, skipping what is already there), then run `CleanUpMusic.exe`. A folder passed on the command line (or dropped on the exe) opens as if picked.
 
 Point it at a copy of an album or two first before running it on the NAS library.

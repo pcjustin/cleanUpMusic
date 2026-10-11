@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.UI.Dispatching;
 
 namespace CleanUpMusic;
@@ -20,7 +21,6 @@ public static unsafe class Core
     [DllImport(Dll)] static extern void cum_send(byte* json);
 
     static DispatcherQueue? queue;
-    static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     static readonly Dictionary<string, List<Action>> handlers = new();
 
     /// Calls `action` on the UI thread whenever the section changes, and once now.
@@ -42,18 +42,17 @@ public static unsafe class Core
         IntPtr p;
         fixed (byte* s = Utf8(section)) p = cum_get(s);
         if (p == IntPtr.Zero) return default!;
-        try { return JsonSerializer.Deserialize<T>(Marshal.PtrToStringUTF8(p)!, Json)!; }
+        // Source-generated (de)serializers: reflection-based JSON doesn't survive trimming.
+        try { return (T)JsonSerializer.Deserialize(Marshal.PtrToStringUTF8(p)!, typeof(T), Documents.Default)!; }
         finally { cum_free(p); }
     }
 
     /// Sends a command, e.g. `Send("scanCovers")` or `Send("setOnlyMissing", value: true)`.
     public static void Send(string op, bool? value = null, string? text = null, string? path = null, IEnumerable<string>? ids = null)
     {
-        var json = JsonSerializer.Serialize(new Command(op, value, text, path, ids), Json);
+        var json = JsonSerializer.Serialize(new Command(op, value, text, path, ids), Documents.Default.Command);
         fixed (byte* j = Utf8(json)) cum_send(j);
     }
-
-    record Command(string Op, bool? Value, string? Text, string? Path, IEnumerable<string>? Ids);
 
     static byte[] Utf8(string s) => System.Text.Encoding.UTF8.GetBytes(s + "\0");
 
@@ -73,6 +72,19 @@ public static unsafe class Core
 }
 
 // Section documents (see Sources/CleanUpMusicBridge/Bridge.swift).
+
+public record Command(string Op, bool? Value, string? Text, string? Path, IEnumerable<string>? Ids);
+
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true)]
+[JsonSerializable(typeof(Command))]
+[JsonSerializable(typeof(Status))]
+[JsonSerializable(typeof(Covers))]
+[JsonSerializable(typeof(Picker))]
+[JsonSerializable(typeof(PickerCurrent))]
+[JsonSerializable(typeof(GroupList))]
+[JsonSerializable(typeof(Selection))]
+[JsonSerializable(typeof(List<Split>))]
+partial class Documents : JsonSerializerContext;
 
 public record Status(string? Root, bool Scanning, int Progress, string? Message, int Albums, int Changes, int Splits, int Discs);
 
