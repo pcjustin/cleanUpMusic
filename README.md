@@ -1,6 +1,6 @@
 # CleanUpMusic
 
-macOS SwiftUI tool for tidying a MinimServer music library (FLAC, MP3, ALAC, WAV, AIFF, APE).
+macOS (SwiftUI) and Windows (WinUI 3) tool for tidying a MinimServer music library (FLAC, MP3, ALAC, WAV, AIFF, APE).
 
 ## Features
 
@@ -18,19 +18,32 @@ Applying skips any tag that changed since its scan (e.g. after applying another 
 
 Scans keep each file's tags for the session and re-read only files whose size or modification date changed, so switching tabs or rescanning after applying is quick; restart the app after editing tags with a tool that preserves modification dates.
 
-Every rename, tag write, saved cover and removed cover file is appended to `~/Library/Logs/CleanUpMusic/changes.log` (`time  action  old  new`, plus the file for tag writes).
+Every rename, tag write, saved cover and removed cover file is appended to `~/Library/Logs/CleanUpMusic/changes.log` (Windows: `%LOCALAPPDATA%\CleanUpMusic\changes.log`) (`time  action  old  new`, plus the file for tag writes).
 
-## Requirements
+## Layout
+
+- `Sources/CleanUpMusicCore` — shared by both platforms. Models and scanning (`Library`, `Tags`, `Chinese`, `CoverSearch`) and the controllers (`AppController`, `CoverPickerController`) that hold the window's state and actions: filters, grouping, ticks, scans, applying, the cover picker.
+- `Sources/CleanUpMusic` — macOS views (SwiftUI), built on macOS only.
+- `Sources/CleanUpMusicBridge` — Windows only: the core as `CleanUpMusicBridge.dll` with a small C API; each window section is a JSON document it pushes on change, and the UI sends commands back.
+- `windows/CleanUpMusic` — Windows views (WinUI 3, C#), laid out like the macOS ones.
+
+## macOS
 
 ```sh
 brew install taglib opencc pkgconf
-```
-
-## Run
-
-```sh
 swift run
 swift test
 ```
+
+## Windows
+
+Needs the Swift toolchain, Visual Studio 2026 with the C++ and WinUI (Windows App SDK, .NET) workloads; TagLib and OpenCC come from Visual Studio's vcpkg.
+
+```powershell
+windows\build.cmd            # or double-click it; add -Test to also run the core tests
+.\windows\build.ps1          # the same, from PowerShell (needs a script policy that allows it)
+```
+
+It produces `windows\dist\CleanUpMusic-win-x64.zip`: unzip anywhere and run `CleanUpMusic.exe`; .NET, the Windows App SDK and the Swift runtime are inside, so the PC needs nothing installed. A folder passed on the command line (or dropped on the exe) opens as if picked.
 
 Point it at a copy of an album or two first before running it on the NAS library.

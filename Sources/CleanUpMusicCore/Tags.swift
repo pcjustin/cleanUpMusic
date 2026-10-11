@@ -1,19 +1,19 @@
 import CTagLib
 import Foundation
 
-struct TagError: LocalizedError {
+public struct TagError: LocalizedError {
     let url: URL
-    var errorDescription: String? { "無法寫入標籤：\(url.path)" }
+    public var errorDescription: String? { "無法寫入標籤：\(url.path)" }
 }
 
-enum Tags {
+public enum Tags {
     /// Reads `Library.tagKeys`, plus `"PICTURE": []` when the file has embedded art.
     static func read(_ url: URL) -> [String: [String]] {
         (url.pathExtension.lowercased() == "flac" ? readFLAC(url.path) : nil) ?? readTagLib(url)
     }
 
     static func readTagLib(_ url: URL) -> [String: [String]] {
-        guard let f = taglib_file_new(url.path) else { return [:] }
+        guard let f = openFile(url) else { return [:] }
         defer { taglib_file_free(f) }
         var out: [String: [String]] = [:]
         for key in Library.tagKeys {
@@ -33,17 +33,33 @@ enum Tags {
     /// still checked; nil leaves the file to TagLib wherever its result could differ: no `fLaC` at the start, a broken
     /// block chain, or no text fields (TagLib then uses an ID3v1 tag).
     static func readFLAC(_ path: String) -> [String: [String]]? {
+        #if os(Windows)
+        guard let h = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? h.close() }
+        func read(_ offset: Int, _ count: Int) -> [UInt8]? {
+            guard (try? h.seek(toOffset: UInt64(offset))) != nil, let d = try? h.read(upToCount: count) else { return nil }
+            return [UInt8](d)
+        }
+        let fileSize = { (try? h.seekToEnd()).map(Int.init) ?? -1 }
+        #else
         let fd = open(path, O_RDONLY)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
         _ = fcntl(fd, F_NOCACHE, 1) // cold NAS reads took ~40% less time than through the page cache
+        func read(_ offset: Int, _ count: Int) -> [UInt8]? {
+            var buf = [UInt8](repeating: 0, count: count)
+            let n = buf.withUnsafeMutableBytes { pread(fd, $0.baseAddress, $0.count, off_t(offset)) }
+            guard n >= 0 else { return nil }
+            buf.removeSubrange(n...)
+            return buf
+        }
+        let fileSize = { Int(lseek(fd, 0, SEEK_END)) }
+        #endif
         var chunk: [UInt8] = [], chunkStart = 0
         func bytes(_ offset: Int, _ count: Int) -> ArraySlice<UInt8>? {
             if offset < chunkStart || offset + count > chunkStart + chunk.count {
-                chunk = [UInt8](repeating: 0, count: max(count, 16 << 10))
-                let n = chunk.withUnsafeMutableBytes { pread(fd, $0.baseAddress, $0.count, off_t(offset)) }
-                guard n >= count else { return nil }
-                chunk.removeSubrange(n...)
+                guard let c = read(offset, max(count, 16 << 10)), c.count >= count else { return nil }
+                chunk = c
                 chunkStart = offset
             }
             return chunk[(offset - chunkStart)...].prefix(count)
@@ -63,7 +79,7 @@ enum Tags {
             picture = picture || type == 6
             offset += 4 + length
         }
-        guard offset <= lseek(fd, 0, SEEK_END) else { return nil }
+        guard offset <= fileSize() else { return nil }
         let pictureFields: Set = ["METADATA_BLOCK_PICTURE", "COVERART"]
         guard let fields = comment.flatMap(vorbisFields), !fields.keys.allSatisfy(pictureFields.contains) else { return nil }
         var out = fields.filter { Library.tagKeys.contains($0.key) }
@@ -119,13 +135,24 @@ enum Tags {
 
     static func write(_ url: URL, _ fields: [String: [String]]) throws {
         defer { forget(url) }
-        guard let f = taglib_file_new(url.path), taglib_file_is_valid(f) != 0 else { throw TagError(url: url) }
+        guard let f = openFile(url), cum_file_is_valid(f) != 0 else { throw TagError(url: url) }
         defer { taglib_file_free(f) }
         for (key, values) in fields {
             taglib_property_set(f, key, values.first)
             for v in values.dropFirst() { taglib_property_set_append(f, key, v) }
         }
-        guard taglib_file_save(f) != 0 else { throw TagError(url: url) }
+        guard cum_file_save(f) != 0 else { throw TagError(url: url) }
+    }
+
+    /// TagLib's `char *` file names are ANSI on Windows, which can't name most Chinese paths; wide ones can.
+    private static func openFile(_ url: URL) -> UnsafeMutablePointer<TagLib_File>? {
+        #if os(Windows)
+        url.withUnsafeFileSystemRepresentation { p in
+            p.flatMap { String(cString: $0) }.flatMap { $0.withCString(encodedAs: UTF16.self) { taglib_file_new_wchar($0) } }
+        }
+        #else
+        taglib_file_new(url.path)
+        #endif
     }
 
     private static func hasPicture(_ f: UnsafeMutablePointer<TagLib_File>) -> Bool {
@@ -141,16 +168,16 @@ enum Tags {
 
     static func embedArt(_ url: URL, _ data: Data, mime: String) throws {
         defer { forget(url) }
-        guard let f = taglib_file_new(url.path), taglib_file_is_valid(f) != 0 else { throw TagError(url: url) }
+        guard let f = openFile(url), cum_file_is_valid(f) != 0 else { throw TagError(url: url) }
         defer { taglib_file_free(f) }
         let ok = data.withUnsafeBytes { raw in
             cum_set_picture(f, raw.baseAddress!.assumingMemoryBound(to: CChar.self), UInt32(data.count), mime) != 0
         }
-        guard ok, taglib_file_save(f) != 0 else { throw TagError(url: url) }
+        guard ok, cum_file_save(f) != 0 else { throw TagError(url: url) }
     }
 
     static func embeddedArt(_ url: URL) -> Data? {
-        guard let f = taglib_file_new(url.path) else { return nil }
+        guard let f = openFile(url) else { return nil }
         defer { taglib_file_free(f) }
         guard let props = taglib_complex_property_get(f, "PICTURE") else { return nil }
         defer { taglib_complex_property_free(props) }

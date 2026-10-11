@@ -1,0 +1,46 @@
+<Window x:Class="CleanUpMusic.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:CleanUpMusic"
+        Title="CleanUpMusic">
+    <Grid x:Name="Root" Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid Padding="16" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Button x:Name="PickButton" Content="選擇音樂資料夾…" Click="Pick" />
+            <TextBlock x:Name="RootText" Grid.Column="1" Text="未選擇" VerticalAlignment="Center"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" />
+            <StackPanel x:Name="Busy" Grid.Column="2" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
+                <ProgressRing IsActive="True" Width="16" Height="16" />
+                <TextBlock x:Name="ProgressText" VerticalAlignment="Center" />
+            </StackPanel>
+        </Grid>
+
+        <!-- macOS TabView: a segmented control centred on the top edge of a rounded box. -->
+        <Grid Grid.Row="1" Margin="16,0,16,16">
+            <Border Margin="0,14,0,0" CornerRadius="8" BorderThickness="1"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}">
+                <Grid Margin="0,18,0,0">
+                    <local:CoversView x:Name="Covers" />
+                    <local:ChineseView x:Name="Chinese" Visibility="Collapsed" />
+                    <local:SplitsView x:Name="Splits" Visibility="Collapsed" />
+                    <local:DiscsView x:Name="Discs" Visibility="Collapsed" />
+                </Grid>
+            </Border>
+            <Border HorizontalAlignment="Center" VerticalAlignment="Top" CornerRadius="6" Padding="2"
+                    BorderThickness="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    Background="{ThemeResource SolidBackgroundFillColorTertiaryBrush}">
+                <StackPanel x:Name="Tabs" Orientation="Horizontal" />
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

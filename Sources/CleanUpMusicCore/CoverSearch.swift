@@ -1,15 +1,18 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
-struct CoverCandidate: Identifiable, Hashable {
-    let full: URL
-    let thumb: URL
-    let title: String
-    let source: String
-    var id: URL { full }
+public struct CoverCandidate: Identifiable, Hashable, Sendable {
+    public let full: URL
+    public let thumb: URL
+    public let title: String
+    public let source: String
+    public var id: URL { full }
 }
 
-enum CoverSearch {
-    static func search(_ query: String) async -> [CoverCandidate] {
+public enum CoverSearch {
+    public static func search(_ query: String) async -> [CoverCandidate] {
         // HK matched TW in tests and CN returns nothing; JP finds Japanese albums missing from TW.
         async let tw = itunes(query, country: "tw")
         async let jp = itunes(query, country: "jp")
@@ -45,7 +48,7 @@ enum CoverSearch {
     }
 
     /// Cover Art Archive answers in seconds, sometimes tens of seconds, so callers show `search` results first.
-    static func musicBrainz(_ q: String) async -> [CoverCandidate] {
+    public static func musicBrainz(_ q: String) async -> [CoverCandidate] {
         var c = URLComponents(string: "https://musicbrainz.org/ws/2/release-group")!
         c.queryItems = [.init(name: "query", value: q), .init(name: "limit", value: "10"), .init(name: "fmt", value: "json")]
         guard let r: MusicBrainz = await fetch(c.url!) else { return [] }

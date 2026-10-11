@@ -1,3 +1,8 @@
 .build/
 .swiftpm/
 CLAUDE.md
+windows/vcpkg_installed/
+windows/native/
+windows/CleanUpMusic/bin/
+windows/CleanUpMusic/obj/
+windows/dist/

@@ -1,0 +1,48 @@
+<UserControl x:Class="CleanUpMusic.CoversView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="using:CleanUpMusic">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <StackPanel Orientation="Horizontal" Spacing="8" Padding="16,16,16,8">
+            <Button x:Name="ScanButton" Content="掃描封面" Click="Scan" />
+            <CheckBox x:Name="OnlyMissing" Content="只顯示缺封面" Click="OnlyMissingClick" />
+            <TextBox x:Name="Filter" PlaceholderText="篩選專輯" Width="240" TextChanged="FilterChanged" />
+        </StackPanel>
+
+        <!-- HSplitView: the album list can be dragged between 280 and 520 wide. -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="ListColumn" Width="360" MinWidth="280" MaxWidth="520" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" MinWidth="520" />
+            </Grid.ColumnDefinitions>
+            <ListView x:Name="Albums" SelectionMode="Single" SelectionChanged="AlbumSelected">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="local:AlbumRow">
+                        <StackPanel Padding="0,4" Spacing="2">
+                            <TextBlock Text="{x:Bind Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{x:Bind Artist}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="已有封面" Foreground="{StaticResource GreenBrush}" Visibility="{x:Bind OkVisibility}" />
+                            <TextBlock Text="{x:Bind UnreadableText}" Foreground="{StaticResource OrangeBrush}" Visibility="{x:Bind UnreadableVisibility}" />
+                            <TextBlock Text="{x:Bind Path}" FontSize="{StaticResource CaptionSize}" TextTrimming="CharacterEllipsis"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" ToolTipService.ToolTip="{x:Bind Path}" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+            <Border x:Name="Splitter" Grid.Column="1" Width="6" Background="Transparent"
+                    PointerPressed="SplitterPressed" PointerMoved="SplitterMoved" PointerReleased="SplitterReleased"
+                    PointerEntered="SplitterEntered" PointerExited="SplitterExited">
+                <Rectangle Width="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+            </Border>
+            <Grid Grid.Column="2">
+                <TextBlock x:Name="Placeholder" Text="從左邊選一張專輯" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                <local:CoverPickerView x:Name="Picker" Visibility="Collapsed" />
+            </Grid>
+        </Grid>
+    </Grid>
+</UserControl>

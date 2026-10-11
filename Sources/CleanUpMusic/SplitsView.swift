@@ -1,8 +1,9 @@
 import AppKit
+import CleanUpMusicCore
 import SwiftUI
 
 struct SplitsView: View {
-    @EnvironmentObject var m: Model
+    @Environment(AppController.self) var m
 
     var body: some View {
         VStack(alignment: .leading) {

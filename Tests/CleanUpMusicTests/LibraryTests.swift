@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import CleanUpMusic
+@testable import CleanUpMusicCore
 
 /// Keeps test runs out of the real change log; every test touching files calls `tempDir()` first.
 private let testLog: Void = {
@@ -14,14 +14,19 @@ private func tempDir() throws -> URL {
     return d
 }
 
+/// One second of silence: a FLAC with only STREAMINFO, or 38 silent MPEG-1 Layer III frames (128 kbps, 44.1 kHz,
+/// mono); enough for TagLib to read and write tags, without needing an encoder.
 private func makeAudio(_ url: URL) throws {
     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/ffmpeg")
-    p.arguments = ["-loglevel", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "1", url.path]
-    try p.run()
-    p.waitUntilExit()
-    #expect(p.terminationStatus == 0)
+    var data: [UInt8]
+    if url.pathExtension == "mp3" {
+        data = (0..<38).flatMap { _ in [0xFF, 0xFB, 0x90, 0xC0] + [UInt8](repeating: 0, count: 413) }
+    } else {
+        let info: UInt64 = 44100 << 44 | 15 << 36 | 44100 // sample rate, 16 bits - 1, total samples
+        data = Array("fLaC".utf8) + [0x80, 0, 0, 34] + [0x10, 0x00, 0x10, 0x00, 0, 0, 0, 0, 0, 0]
+            + (0..<8).reversed().map { UInt8(info >> ($0 * 8) & 0xFF) } + [UInt8](repeating: 0, count: 16)
+    }
+    try Data(data).write(to: url)
 }
 
 private func touch(_ url: URL) {
@@ -80,9 +85,7 @@ private func touch(_ url: URL) {
 
     #expect(Set(changes.map(\.new)) == ["後來", "後來.flac", "劉若英"])
 
-    var all = changes
-    for i in all.indices { all[i].selected = true }
-    #expect(Library.apply(all).isEmpty)
+    #expect(Library.apply(changes).isEmpty)
     let renamed = root.appendingPathComponent("劉若英/後來/後來.flac")
     #expect(Tags.read(renamed)["TITLE"] == ["後來"])
     #expect(Library.scanChinese(root).isEmpty)
