@@ -1,4 +1,7 @@
 import Foundation
+#if os(Windows)
+import WinSDK
+#endif
 
 public enum CoverState: Equatable, Sendable {
     case ok, missing
@@ -48,7 +51,7 @@ public enum ChangeKind: Hashable, Sendable {
 }
 
 public struct Change: Identifiable, Sendable {
-    public let id = UUID()
+    public let id = Foundation.UUID() // WinSDK has a UUID too
     public let kind: ChangeKind
     public let url: URL
     public let old: String
@@ -56,6 +59,8 @@ public struct Change: Identifiable, Sendable {
     /// Values a tag change writes; `new` is their display form.
     public let values: [String]
     public var group = ""
+    /// Extra detail for the list, e.g. the code page a garbled name is repaired from.
+    public var note = ""
 }
 
 public enum Library {
@@ -78,31 +83,40 @@ public enum Library {
         let files: [URL]
     }
 
-    /// Folders that directly contain audio, plus the root depth; paths are symlink-resolved. Folders are listed 32 at
-    /// a time, each queued as soon as its parent is listed (a cold NAS walk takes ~27% less; the NAS answers listings
-    /// mostly one by one), prefetching the size and modification date `Tags.readAll` checks against its cache.
-    /// Serial queues, unlike GCD's shared pool, always get a thread, even when the caller blocks a Swift task.
+    /// Folders that directly contain audio, plus the root depth.
     private static func audioDirs(_ root: URL) -> (dirs: [AudioDir], rootDepth: Int) {
+        let (folders, rootDepth) = listTree(root)
+        let dirs = folders.compactMap { f in
+            let tracks = f.files.filter { audioExts.contains($0.pathExtension.lowercased()) }.sorted { $0.path < $1.path }
+            return tracks.isEmpty ? nil : AudioDir(dir: f.dir, tracks: tracks, files: f.files)
+        }
+        return (dirs, rootDepth)
+    }
+
+    /// Every folder under the root (the root included) with its files, plus the root depth; paths are
+    /// symlink-resolved. Folders are listed 32 at a time, each queued as soon as its parent is listed (a cold NAS
+    /// walk takes ~27% less; the NAS answers listings mostly one by one), prefetching the size and modification date
+    /// `Tags.readAll` checks against its cache. Serial queues, unlike GCD's shared pool, always get a thread, even
+    /// when the caller blocks a Swift task.
+    private static func listTree(_ root: URL) -> (folders: [(dir: URL, files: [URL])], rootDepth: Int) {
         #if os(Windows)
-        let realRoot = root.resolvingSymlinksInPath()
+        let realRoot = root // resolvingSymlinksInPath turns \\server\share into \server\share
         #else
         let realRoot = URL(fileURLWithPath: realpath(root.path, nil).map { p in defer { free(p) }; return String(cString: p) } ?? root.path)
         #endif
         let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
         let queues = (0..<32).map { _ in DispatchQueue(label: "nas") }
-        let turn = Locked(0), found = Locked<[AudioDir]>([]), listed = DispatchGroup()
+        let turn = Locked(0), found = Locked<[(dir: URL, files: [URL])]>([]), listed = DispatchGroup()
         func list(_ dir: URL) {
-            let items = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys, options: .skipsHiddenFiles)) ?? []
             var files: [URL] = []
-            for u in items where !u.lastPathComponent.hasPrefix(".") {
-                if (try? u.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+            for (u, isDirectory) in entries(of: dir, prefetching: keys) {
+                if isDirectory {
                     queues[turn { $0 += 1; return $0 % 32 }].async(group: listed) { list(u) }
                 } else {
                     files.append(u)
                 }
             }
-            let tracks = files.filter { audioExts.contains($0.pathExtension.lowercased()) }.sorted { $0.path < $1.path }
-            if !tracks.isEmpty { found { $0.append(AudioDir(dir: URL(fileURLWithPath: dir.path, isDirectory: true), tracks: tracks, files: files)) } }
+            found { $0.append((URL(fileURLWithPath: dir.path, isDirectory: true), files)) }
         }
         queues[0].async(group: listed) { list(realRoot) }
         listed.wait()
@@ -280,6 +294,78 @@ public enum Library {
             if groups.isSubset(of: japanese) { japanese.insert(folderChanges[i].group) }
         }
         return (changes + folderChanges).filter { !japanese.contains($0.group) }
+    }
+
+    /// File and folder names garbled by being read in the wrong code page (see `Mojibake`), with their repaired
+    /// names. A track's TITLE settles which reading is meant when a name could be read more than one way.
+    public static func scanMojibake(_ root: URL, progress: (Int) -> Void = { _ in }) -> [Change] {
+        let (folders, rootDepth) = listTree(root)
+        let suspects = folders.flatMap(\.files).filter { Mojibake.mightBeGarbled($0.lastPathComponent) }
+        let tracks = suspects.filter { audioExts.contains($0.pathExtension.lowercased()) }
+        let titles = Dictionary(uniqueKeysWithValues: zip(tracks, Tags.readAll(tracks, progress: progress).map { $0["TITLE"]?.first }))
+        var changes: [Change] = []
+        for f in suspects {
+            // A TITLE can be garbled the same way ("¤T¤é¤ë" for 三日月): repaired, it still helps; past repair, it can't.
+            let name = f.lastPathComponent, tag = titles[f] ?? nil
+            let title = tag.flatMap { Mojibake.repair($0)?.name ?? (Mojibake.mightBeGarbled($0) ? nil : $0) }
+            let fixed: (name: String, note: String)
+            if let r = Mojibake.repair(name, hint: title) {
+                fixed = (r.name, r.encoding)
+            } else if Mojibake.isLossy(name), let title, !title.isEmpty {
+                fixed = (Mojibake.fromTitle(name, title: title), "依 TITLE 標籤")
+            } else {
+                continue
+            }
+            guard fixed.name != name else { continue }
+            changes.append(Change(kind: .file, url: f, old: name, new: fixed.name, values: [],
+                                  group: relativePath(f.deletingLastPathComponent(), rootDepth), note: fixed.note))
+        }
+        for d in folders.map(\.dir) where d.pathComponents.count > rootDepth {
+            guard let r = Mojibake.repair(d.lastPathComponent) else { continue }
+            changes.append(Change(kind: .folder, url: d, old: d.lastPathComponent, new: r.name, values: [],
+                                  group: relativePath(d, rootDepth), note: r.encoding))
+        }
+        return changes
+    }
+
+    /// A folder's entries, hidden (dot) ones left out.
+    static func contents(of dir: URL) -> [URL] { entries(of: dir).map(\.url) }
+
+    /// A folder's entries and whether each is a folder, hidden (dot) ones left out. On Windows this asks the system
+    /// directly: Foundation lists nothing for a folder on a network share (\\server\share) when asked by URL, and
+    /// checking each entry for being a folder costs a NAS round trip that a listing already answers.
+    static func entries(of dir: URL, prefetching keys: [URLResourceKey]? = nil) -> [(url: URL, isDirectory: Bool)] {
+        #if os(Windows)
+        let pattern = dir.withUnsafeFileSystemRepresentation { String(cString: $0!) } + "\\*"
+        var data = WIN32_FIND_DATAW()
+        let find = pattern.withCString(encodedAs: UTF16.self) {
+            FindFirstFileExW($0, FindExInfoBasic, &data, FindExSearchNameMatch, nil, DWORD(FIND_FIRST_EX_LARGE_FETCH))
+        }
+        guard let find, find != INVALID_HANDLE_VALUE else { return [] }
+        defer { FindClose(find) }
+        var out: [(url: URL, isDirectory: Bool)] = []
+        repeat {
+            let name = withUnsafeBytes(of: data.cFileName) { raw in
+                String(decoding: raw.bindMemory(to: UInt16.self).prefix { $0 != 0 }, as: UTF16.self)
+            }
+            guard !name.hasPrefix(".") else { continue }
+            let isDirectory = data.dwFileAttributes & DWORD(FILE_ATTRIBUTE_DIRECTORY) != 0
+            let url = dir.appendingPathComponent(name, isDirectory: isDirectory)
+            out.append((url, isDirectory))
+            if !isDirectory {
+                // FILETIME counts 100 ns ticks from 1601.
+                let ticks = UInt64(data.ftLastWriteTime.dwHighDateTime) << 32 | UInt64(data.ftLastWriteTime.dwLowDateTime)
+                let date = Date(timeIntervalSince1970: Double(ticks) / 10_000_000 - 11_644_473_600)
+                let size = Int(UInt64(data.nFileSizeHigh) << 32 | UInt64(data.nFileSizeLow))
+                Tags.listed { $0[url.path] = (size, date) }
+            }
+        } while FindNextFileW(find, &data)
+        return out
+        #else
+        let items = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys, options: .skipsHiddenFiles)) ?? []
+        return items.filter { !$0.lastPathComponent.hasPrefix(".") }
+            .map { ($0, (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true) }
+        #endif
     }
 
     /// Path below the scanned root; the root's own name for the root itself.

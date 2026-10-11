@@ -60,7 +60,7 @@ private func track(_ s: Section) {
 }
 
 private enum Section: String, CaseIterable {
-    case status, covers, picker, pickerCurrent, chinese, chineseSelection, splits, discs, discsSelection
+    case status, covers, picker, pickerCurrent, chinese, chineseSelection, splits, discs, discsSelection, mojibake, mojibakeSelection
 
     func json() -> String {
         let encoder = JSONEncoder()
@@ -76,6 +76,8 @@ private enum Section: String, CaseIterable {
         case .splits: data = try? encoder.encode(app.splits.map(Split.init))
         case .discs: data = try? encoder.encode(Groups(groups: app.discGroups, filter: ""))
         case .discsSelection: data = try? encoder.encode(Selection(ids: app.selectedDiscs, count: app.selectedDiscAlbums))
+        case .mojibake: data = try? encoder.encode(Groups(groups: app.mojibakeGroups, filter: ""))
+        case .mojibakeSelection: data = try? encoder.encode(Selection(ids: app.selectedMojibake, count: app.selectedMojibake.count))
         }
         return data.map { String(decoding: $0, as: UTF8.self) } ?? "null"
     }
@@ -92,6 +94,7 @@ private struct Status: Encodable {
     var changes = app.changes.count
     var splits = app.splits.count
     var discs = app.discs.count
+    var mojibake = app.mojibake.count
 }
 
 private struct Covers: Encodable {
@@ -138,7 +141,7 @@ private struct PickerCurrent: Encodable {
 }
 
 private struct Groups: Encodable {
-    struct Item: Encodable { let id: String, label: String, old: String, new: String, path: String, folder: String, file: String }
+    struct Item: Encodable { let id: String, label: String, note: String, old: String, new: String, path: String, folder: String, file: String }
     struct Group: Encodable { let name: String, summary: String, tracks: Int, changes: [Item] }
     let groups: [Group], filter: String
 
@@ -146,7 +149,7 @@ private struct Groups: Encodable {
         self.filter = filter
         self.groups = groups.map { g in
             Group(name: g.name, summary: AppController.summary(g.changes), tracks: AppController.trackCount(g.changes), changes: g.changes.map { c in
-                Item(id: c.id.uuidString, label: c.kind.label, old: c.old, new: c.new, path: c.url.path,
+                Item(id: c.id.uuidString, label: c.kind.label, note: c.note, old: c.old, new: c.new, path: c.url.path,
                      folder: c.url.deletingLastPathComponent().lastPathComponent, file: c.url.lastPathComponent)
             })
         }
@@ -187,6 +190,10 @@ private struct Command: Decodable {
         case "scanChinese": app.scanChinese()
         case "scanSplits": app.scanSplits()
         case "scanDiscs": app.scanDiscs()
+        case "scanMojibake": app.scanMojibake()
+        case "applyMojibake": app.applyMojibake()
+        case "selectMojibake": app.setMojibakeSelected(app.mojibake.filter { ids.contains($0.id) }, value ?? false)
+        case "selectAllMojibake": app.setMojibakeSelected(app.mojibake, value ?? false)
         case "applyChanges": app.applyChanges()
         case "applyDiscs": app.applyDiscs()
         case "dismissMessage": app.message = nil

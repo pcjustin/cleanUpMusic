@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// Changes of one album (簡轉繁) or disc set (CD 編號), as the lists show them.
+/// Changes of one album (簡轉繁), disc set (CD 編號) or folder (亂碼檔名), as the lists show them.
 public struct ChangeGroup: Identifiable, Sendable {
     public let name: String
     public let changes: [Change]
@@ -17,6 +17,7 @@ public final class AppController: @unchecked Sendable {
     public private(set) var changes: [Change] = []
     public private(set) var splits: [AlbumSplit] = []
     public private(set) var discs: [Change] = []
+    public private(set) var mojibake: [Change] = []
     public private(set) var scanning = false
     public private(set) var progress = 0
     public var message: String?
@@ -41,6 +42,9 @@ public final class AppController: @unchecked Sendable {
     // CD 編號
     public private(set) var selectedDiscs = Set<UUID>()
 
+    // 亂碼檔名
+    public private(set) var selectedMojibake = Set<UUID>()
+
     /// Runs a closure on the UI thread.
     @ObservationIgnored public let ui: @Sendable (@escaping @Sendable () -> Void) -> Void
 
@@ -54,40 +58,79 @@ public final class AppController: @unchecked Sendable {
         changes = []
         splits = []
         discs = []
+        mojibake = []
         selectedChanges = []
         selectedDiscs = []
+        selectedMojibake = []
         coverSelection = nil
     }
 
-    public func scanCovers() {
-        runScan(Library.scanCovers) { albums in
+    // Each scan ends with a message saying what it found, so a quick scan that finds nothing still visibly finishes;
+    // `report` leads it with what an apply did before the rescan.
+
+    public func scanCovers(report: String? = nil) {
+        runScan(Library.scanCovers, report: report) { albums in
             self.albums = albums
             if !albums.contains(where: { $0.id == self.coverSelection }) { self.coverSelection = nil }
             self.coverRevision += 1
+            let missing = albums.filter { $0.cover == .missing }.count
+            let unreadable = albums.filter { if case .unreadable = $0.cover { true } else { false } }.count
+            return "\(albums.count) 張專輯，缺封面 \(missing) 張，有圖但 MinimServer 讀不到 \(unreadable) 張。"
         }
     }
-    public func scanChinese() { runScan(Library.scanChinese) { self.changes = $0; self.selectedChanges = [] } }
-    public func scanSplits() { runScan(Library.scanSplits) { self.splits = $0 } }
-    public func scanDiscs() { runScan(Library.scanDiscs) { self.discs = $0; self.selectedDiscs = [] } }
 
-    public func applyChanges() { apply(changes.filter { selectedChanges.contains($0.id) }, then: scanChinese) }
-    public func applyDiscs() { apply(discs.filter { selectedDiscs.contains($0.id) }, then: scanDiscs) }
+    public func scanChinese(report: String? = nil) {
+        runScan(Library.scanChinese, report: report) { changes in
+            self.changes = changes
+            self.selectedChanges = []
+            return changes.isEmpty ? "沒有找到簡體字。" : "\(Set(changes.map(\.group)).count) 張專輯共 \(changes.count) 項可轉成繁體。"
+        }
+    }
 
-    /// Applies the ticked changes, reports failures, and rescans so the list matches the files again.
-    private func apply(_ selected: [Change], then rescan: @escaping @Sendable () -> Void) {
+    public func scanSplits(report: String? = nil) {
+        runScan(Library.scanSplits, report: report) { splits in
+            self.splits = splits
+            return splits.isEmpty ? "沒有資料夾的 ALBUM 標籤不一致。" : "\(splits.count) 個資料夾裡有不同的 ALBUM 標籤。"
+        }
+    }
+
+    public func scanDiscs(report: String? = nil) {
+        runScan(Library.scanDiscs, report: report) { discs in
+            self.discs = discs
+            self.selectedDiscs = []
+            return discs.isEmpty ? "沒有需要補 CD 編號的專輯。" : "\(Set(discs.map(\.group)).count) 張專輯共 \(discs.count) 項標籤可補上。"
+        }
+    }
+
+    public func scanMojibake(report: String? = nil) {
+        runScan(Library.scanMojibake, report: report) { changes in
+            self.mojibake = changes
+            self.selectedMojibake = []
+            return changes.isEmpty ? "沒有找到亂碼的檔名或資料夾名稱。" : "找到 \(changes.count) 個亂碼的檔名或資料夾名稱。"
+        }
+    }
+
+    public func applyChanges() { apply(changes.filter { selectedChanges.contains($0.id) }) { self.scanChinese(report: $0) } }
+    public func applyDiscs() { apply(discs.filter { selectedDiscs.contains($0.id) }) { self.scanDiscs(report: $0) } }
+    public func applyMojibake() { apply(mojibake.filter { selectedMojibake.contains($0.id) }) { self.scanMojibake(report: $0) } }
+
+    /// Applies the ticked changes, then rescans so the list matches the files again, reporting both.
+    private func apply(_ selected: [Change], then rescan: @escaping @Sendable (String) -> Void) {
         guard !selected.isEmpty, !scanning else { return }
         scanning = true
         DispatchQueue.global().async { [ui] in
             let failures = Library.apply(selected)
             ui {
                 self.scanning = false
-                if !failures.isEmpty { self.message = "\(failures.count) 筆失敗：\n" + failures.joined(separator: "\n") }
-                rescan()
+                var report = "已套用勾選的 \(selected.count) 項變更。"
+                if !failures.isEmpty { report += "其中 \(failures.count) 筆失敗：\n" + failures.joined(separator: "\n") }
+                rescan(report + "\n\n重新掃描")
             }
         }
     }
 
-    private func runScan<T>(_ scan: @escaping @Sendable (URL, (Int) -> Void) -> T, then apply: @escaping @Sendable (T) -> Void) {
+    private func runScan<T>(_ scan: @escaping @Sendable (URL, (Int) -> Void) -> T, report: String?,
+                            then apply: @escaping @Sendable (T) -> String) {
         guard let root, !scanning else { return }
         scanning = true
         progress = 0
@@ -95,8 +138,9 @@ public final class AppController: @unchecked Sendable {
             let result = scan(root) { n in ui { self.progress = max(self.progress, n) } }
             nonisolated(unsafe) let r = result
             ui {
-                apply(r)
+                let found = apply(r)
                 self.scanning = false
+                self.message = (report ?? "掃描") + "完成：" + found
             }
         }
     }
@@ -170,6 +214,17 @@ public final class AppController: @unchecked Sendable {
     public var selectedDiscAlbums: Int { Set(discs.filter { selectedDiscs.contains($0.id) }.map(\.group)).count }
 
     public static func trackCount(_ changes: [Change]) -> Int { Set(changes.map(\.url)).count }
+
+    // MARK: 亂碼檔名
+
+    public var mojibakeGroups: [ChangeGroup] { Self.grouped(mojibake) }
+
+    public func allMojibakeSelected(_ changes: [Change]) -> Bool { changes.allSatisfy { selectedMojibake.contains($0.id) } }
+
+    public func setMojibakeSelected(_ changes: [Change], _ value: Bool) {
+        let ids = changes.map(\.id)
+        if value { selectedMojibake.formUnion(ids) } else { selectedMojibake.subtract(ids) }
+    }
 
     private static func grouped(_ changes: [Change]) -> [ChangeGroup] {
         Dictionary(grouping: changes, by: \.group).sorted { $0.key < $1.key }.map { ChangeGroup(name: $0.key, changes: $0.value) }

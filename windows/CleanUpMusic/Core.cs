@@ -86,7 +86,7 @@ public record Command(string Op, bool? Value, string? Text, string? Path, IEnume
 [JsonSerializable(typeof(List<Split>))]
 partial class Documents : JsonSerializerContext;
 
-public record Status(string? Root, bool Scanning, int Progress, string? Message, int Albums, int Changes, int Splits, int Discs);
+public record Status(string? Root, bool Scanning, int Progress, string? Message, int Albums, int Changes, int Splits, int Discs, int Mojibake);
 
 public record CoverItem(string Id, string Title, string Artist, string Path, string State, int Unreadable);
 public record Covers(bool OnlyMissing, string Filter, string? Selection, List<CoverItem> Items);
@@ -100,7 +100,7 @@ public record Picker(string Id, bool Split, string Query, bool Searching, bool T
 public record CurrentImage(string Name, byte[] Data);
 public record PickerCurrent(string Id, List<CurrentImage> Images);
 
-public record ChangeItem(string Id, string Label, string Old, string New, string Path, string Folder, string File);
+public record ChangeItem(string Id, string Label, string Note, string Old, string New, string Path, string Folder, string File);
 public record ChangeGroup(string Name, string Summary, int Tracks, List<ChangeItem> Changes);
 public record GroupList(List<ChangeGroup> Groups, string Filter);
 public record Selection(List<string> Ids, int Count);

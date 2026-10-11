@@ -26,7 +26,7 @@ public sealed partial class MainWindow : Window
         if (AppWindow.Presenter is OverlappedPresenter p)
             (p.PreferredMinimumWidth, p.PreferredMinimumHeight) = (Fit(1000, area.Width), Fit(650, area.Height));
 
-        foreach (var view in new UIElement[] { Covers, Chinese, Splits, Discs })
+        foreach (var view in new UIElement[] { Covers, Chinese, Splits, Discs, Mojibake })
         {
             var button = new Button { Padding = new Thickness(12, 3, 12, 3), MinWidth = 0, BorderThickness = new Thickness(0) };
             int index = tabs.Count;
@@ -61,7 +61,7 @@ public sealed partial class MainWindow : Window
         RootText.Text = s.Root is { } root ? Ui.Native(root) : "未選擇";
         Busy.Visibility = s.Scanning ? Visibility.Visible : Visibility.Collapsed;
         ProgressText.Text = $"處理中… {s.Progress}";
-        string[] titles = { $"封面 ({s.Albums})", $"簡轉繁 ({s.Changes})", $"專輯分裂 ({s.Splits})", $"CD 編號 ({s.Discs})" };
+        string[] titles = { $"封面 ({s.Albums})", $"簡轉繁 ({s.Changes})", $"專輯分裂 ({s.Splits})", $"CD 編號 ({s.Discs})", $"亂碼檔名 ({s.Mojibake})" };
         for (int i = 0; i < tabs.Count; i++) tabs[i].button.Content = titles[i];
         if (s.Message != null && !showingMessage) ShowMessage(s.Message);
     }

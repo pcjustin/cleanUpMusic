@@ -34,6 +34,7 @@
                     <local:ChineseView x:Name="Chinese" Visibility="Collapsed" />
                     <local:SplitsView x:Name="Splits" Visibility="Collapsed" />
                     <local:DiscsView x:Name="Discs" Visibility="Collapsed" />
+                    <local:MojibakeView x:Name="Mojibake" Visibility="Collapsed" />
                 </Grid>
             </Border>
             <Border HorizontalAlignment="Center" VerticalAlignment="Top" CornerRadius="6" Padding="2"

@@ -39,6 +39,7 @@ struct ContentView: View {
                 ChineseView().tabItem { Text("簡轉繁 (\(m.changes.count))") }
                 SplitsView().tabItem { Text("專輯分裂 (\(m.splits.count))") }
                 DiscsView().tabItem { Text("CD 編號 (\(m.discs.count))") }
+                MojibakeView().tabItem { Text("亂碼檔名 (\(m.mojibake.count))") }
             }
         }
         .frame(minWidth: 1000, minHeight: 650)

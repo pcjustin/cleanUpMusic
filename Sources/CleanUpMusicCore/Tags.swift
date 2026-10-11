@@ -109,28 +109,93 @@ public enum Tags {
         return fields
     }
 
-    /// Tags by path with the size and modification date they were read at.
-    private static let cache = Locked<[String: (size: Int?, date: Date, tags: [String: [String]])]>([:])
+    /// Tags of a file as read, with the size and modification date they were read at.
+    private struct Cached: Codable {
+        var size: Int?
+        var date: Date
+        var tags: [String: [String]]
+    }
+
+    /// Where tags are kept between runs, so a restart doesn't read the whole NAS again; nil keeps them in memory
+    /// only (tests). Entries still count only while the file's size and modification date match.
+    #if os(Windows)
+    nonisolated(unsafe) public static var cacheURL: URL? = URL(fileURLWithPath: ProcessInfo.processInfo.environment["LOCALAPPDATA"] ?? NSTemporaryDirectory())
+        .appendingPathComponent("CleanUpMusic/tags.json")
+    #else
+    nonisolated(unsafe) public static var cacheURL: URL? = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+        .appendingPathComponent("CleanUpMusic/tags.json")
+    #endif
+
+    /// Tags by path, loaded from `cacheURL` on first use.
+    private static let cache = Locked<[String: Cached]>(load())
+    /// Whether `cache` has entries `cacheURL` lacks.
+    private static let unsaved = Locked(false)
+
+    private static func load() -> [String: Cached] {
+        cacheURL.flatMap { try? load($0) } ?? [:]
+    }
+
+    private static func load(_ url: URL) throws -> [String: Cached] {
+        // Dates round-trip exactly as Foundation's own Double (deferredToDate), which matching them needs.
+        try JSONDecoder().decode([String: Cached].self, from: Data(contentsOf: url))
+    }
+
+    /// The tags a run starting from this cache file would take for `url` without reading it.
+    static func cachedTagsForTesting(_ file: URL, _ url: URL) throws -> [String: [String]]? {
+        let (size, date) = stamp(url)
+        return try load(file)[url.path].flatMap { $0.date == date && $0.size == size ? $0.tags : nil }
+    }
+
+    /// Writes the cache when a scan added to it; a failed write only costs the next start a slower first scan.
+    private static func save() {
+        guard let url = cacheURL, unsaved({ v in defer { v = false }; return v }) else { return }
+        guard let data = try? JSONEncoder().encode(cache { $0 }) else { return }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
+    }
 
     /// Reads many files, 32 at a time: NAS round trips, not CPU, are the limit. A file whose size and modification
     /// date (prefetched by the folder walk) still match the cache isn't read again, so rescans only read changes.
     static func readAll(_ urls: [URL], progress: (Int) -> Void = { _ in }) -> [[String: [String]]] {
         let done = Locked(0)
+        defer { save() }
         return urls.concurrentMap { url in
-            let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-            let cached = cache { $0[url.path] }.flatMap { $0.date == v?.contentModificationDate && $0.size == v?.fileSize ? $0.tags : nil }
-            let tags = cached ?? read(url)
-            if let date = v?.contentModificationDate { cache { $0[url.path] = (v?.fileSize, date, tags) } }
-            let n = done { $0 += 1; return $0 }
-            if n % 100 == 0 || n == urls.count { progress(n) }
+            let (size, date) = stamp(url)
+            if let hit = cache({ $0[url.path] }), hit.date == date, hit.size == size {
+                count(done, urls.count, progress)
+                return hit.tags
+            }
+            let tags = read(url)
+            if let date {
+                cache { $0[url.path] = Cached(size: size, date: date, tags: tags) }
+                unsaved { $0 = true }
+            }
+            count(done, urls.count, progress)
             return tags
         }
+    }
+
+    private static func count(_ done: Locked<Int>, _ total: Int, _ progress: (Int) -> Void) {
+        let n = done { $0 += 1; return $0 }
+        if n % 100 == 0 || n == total { progress(n) }
+    }
+
+    /// Size and modification date by path from the latest folder walk (Windows, where the listing has them but
+    /// asking a NAS file for them costs a round trip as long as reading its tags).
+    static let listed = Locked<[String: (size: Int, date: Date)]>([:])
+
+    private static func stamp(_ url: URL) -> (size: Int?, date: Date?) {
+        if let s = listed({ $0[url.path] }) { return (s.size, s.date) }
+        let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        return (v?.fileSize, v?.contentModificationDate)
     }
 
     /// Writes made here can land within the NAS listing cache's lifetime, so the folder walk may still report the
     /// old modification date; dropping the entry makes the next scan read the file again.
     private static func forget(_ url: URL) {
         cache { _ = $0.removeValue(forKey: url.path) }
+        unsaved { $0 = true }
+        listed { _ = $0.removeValue(forKey: url.path) }
     }
 
     static func write(_ url: URL, _ fields: [String: [String]]) throws {

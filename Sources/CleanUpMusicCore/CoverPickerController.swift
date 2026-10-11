@@ -46,7 +46,7 @@ public final class CoverPickerController: @unchecked Sendable {
         search()
         let parent = album.dir.deletingLastPathComponent()
         DispatchQueue.global().async { [ui = app.ui] in
-            let images = ((try? FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? [])
+            let images = Library.contents(of: parent)
                 .filter { Library.imageExts.contains($0.pathExtension.lowercased()) }
                 .sorted { $0.path < $1.path }
             ui { self.parentImages = images }
@@ -69,7 +69,7 @@ public final class CoverPickerController: @unchecked Sendable {
         loadedRevision = app.coverRevision
         let a = album, revision = loadedRevision
         DispatchQueue.global().async { [ui = app.ui] in
-            let files = ((try? FileManager.default.contentsOfDirectory(at: a.dir, includingPropertiesForKeys: nil)) ?? [])
+            let files = Library.contents(of: a.dir)
                 .filter(Library.isMinimCover).sorted { $0.path < $1.path }
             var out = files.compactMap { u in (try? Data(contentsOf: u)).map { CurrentCover(name: u.lastPathComponent, data: $0) } }
             if let d = Tags.embeddedArt(a.tracks[0]) { out.append(CurrentCover(name: "內嵌", data: d)) }
